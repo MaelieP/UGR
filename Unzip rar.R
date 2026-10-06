@@ -121,5 +121,10 @@ contenu <- contenu |>
 dim(contenu)        # nombre de lignes
 head(contenu)
 
-write.csv2(contenu, "~/work/UGR/Panel_Hogares_content.csv", row.names = FALSE)
+dossier_data <- path.expand("~/work/UGR/data")
+dir.create(dossier_data, showWarnings = FALSE, recursive = TRUE)
+
+write.csv2(contenu, file.path(dossier_data, "Panel_Hogares_content.csv"), row.names = FALSE)
+
+
 # => Attention certains fichiers (17) ont une taille aberrante, pas de similitude entre ces fichiers... 
