@@ -1,0 +1,168 @@
+---
+title: "exploration_bdd_turismo"
+format: html
+editor: visual
+---
+
+## Exploration of the datos on turismo
+
+```{r packages}
+
+library(aws.s3)
+library(readr)
+library(shiny)
+library(shinyWidgets)
+library(leaflet)
+library(dplyr)
+library(sf)
+library(stringr)
+library(purrr)
+library(tools)
+library(mapSpain)
+library(ggplot2)
+library(classInt)
+```
+
+```{r loading db}
+
+
+lire <- function(fichier) {
+  s3read_using(
+    FUN = read_csv2,
+    object = paste0("turismo/", fichier),
+    bucket = "mperier",
+    opts = list(region = "", base_url = Sys.getenv("AWS_S3_ENDPOINT"))
+  )
+}
+
+v_tur_municipios <- lire("vivienda_tur_municipios.csv") %>% mutate(Total = round(as.numeric(Total)))
+v_tur_prov <- lire("vivienda_tur_prov.csv")%>% mutate(Total = round(as.numeric(Total)))
+v_tur_pctge <- lire("vivienda_tur_%.csv") %>% mutate(Total = as.numeric(Total))
+```
+
+```{r cleaning}
+
+# Creating date 
+
+noms <- ls(pattern = "^v_tur")
+
+for (n in noms) {
+  bdd <- get(n, envir = .GlobalEnv)
+  
+  bdd$date <- as.Date(paste0(sub("M", "-", bdd$Periodo), "-01"))
+  bdd$CCAA <- substr(bdd$`Comunidades y Ciudades Autónomas`, 1, 2)
+  bdd$Provincia_codigo <- substr(bdd$Provincias, 1, 2)
+  
+  bdd <- bdd |>
+    relocate(CCAA, .before = `Comunidades y Ciudades Autónomas`) |>
+    relocate(Provincia_codigo, .before = Provincias)
+  
+  if ("Municipios" %in% names(bdd)) {
+    bdd$codigo_postal <- substr(bdd$Municipios, 1, 5)
+    bdd <- relocate(bdd, codigo_postal, .before = Municipios)
+  }
+  
+  assign(n, bdd, envir = .GlobalEnv)
+}
+```
+
+```{r}
+v_tur_andalucia <- v_tur_municipios %>% filter(str_starts(CCAA,"01"))
+```
+
+```{r download map}
+ccaa  <- esp_get_ccaa()    # 19 communautés et villes autonomes
+prov  <- esp_get_prov()    # 52 provinces
+munic <- esp_get_munic()   # communes 
+
+prov_andalucia <- esp_get_prov() %>%
+  filter(codauto == "01") %>%
+  st_transform(4326)
+
+munic_andalucia <- esp_get_munic(region = "Andalucía")
+```
+
+```{r}
+
+df <- v_tur_prov |>
+  filter(date == as.Date("2024-08-01"),
+         CCAA == "01",
+         !is.na(Provincia_codigo),
+         `Viviendas y plazas` == "Viviendas turísticas") |>
+  select(Provincia_codigo, valor = Total)   
+
+carte <- prov_andalucia |>
+  left_join(df, by = c("cpro" = "Provincia_codigo"))
+
+bornes <- classIntervals(carte$valor, n = 4, style = "jenks")$brks
+
+carte <- carte |>
+  mutate(classe = cut(valor, breaks = bornes, include.lowest = TRUE, dig.lab = 6))
+
+ggplot(carte) +
+  geom_sf(aes(fill = classe), color = "white", linewidth = 0.3) +
+  scale_fill_brewer(palette = "Blues", na.value = "grey90",
+                    name = "Valeur", drop = FALSE) +
+  theme_void() +
+  labs(title = "Number of touristic housing per province in Andalucía")
+```
+
+```{r}
+ui <- fluidPage(
+  titlePanel("Number of touristic housing per province in Andalucía"),
+  sidebarLayout(
+    sidebarPanel(
+      sliderTextInput("date", "Date",
+                      choices = format(dates, "%Y-%m"),
+                      selected = format(dates[1], "%Y-%m"),
+                      animate = animationOptions(interval = 1000, loop = FALSE))
+      ),
+    mainPanel(leafletOutput("carte", height = 600))
+  )
+)
+
+server <- function(input, output, session) {
+  
+  donnees <- reactive({
+    df <- v_tur_prov |>
+      filter(format(date, "%Y-%m") == input$date,
+             CCAA == "01",
+             !is.na(Provincia_codigo),
+             `Viviendas y plazas` == "Viviendas turísticas") |>
+      select(Provincia_codigo, valor = Total)
+    
+    # VOTRE jointure
+    prov_andalucia |>
+      left_join(df, by = c("cpro" = "Provincia_codigo"))
+  })
+  
+  output$carte <- renderLeaflet({
+    carte <- donnees()
+    
+    # VOS bornes, avec n = 4 ; unique() évite l'erreur de doublons
+    bornes <- unique(classIntervals(carte$valor, n = 4, style = "jenks")$brks)
+    pal <- colorBin("Blues", domain = carte$valor, bins = bornes,
+                    na.color = "#e5e5e5")
+    
+    etiquettes <- sprintf("<strong>%s</strong><br/>%s",
+                          carte$ine.prov.name,
+                          format(carte$valor, big.mark = " ")) |>
+      lapply(htmltools::HTML)
+    
+    leaflet(carte) |>
+      addProviderTiles("CartoDB.Positron") |>
+      addPolygons(
+        fillColor = ~pal(valor), fillOpacity = 0.85,
+        color = "white", weight = 1,
+        label = etiquettes,
+        highlightOptions = highlightOptions(weight = 3, color = "#333",
+                                            bringToFront = TRUE)
+      ) |>
+      addLegend(pal = pal, values = ~valor,
+                title = "Number of touristic housing",
+                position = "bottomright", na.label = "No data")
+  })
+}
+
+shinyApp(ui, server)
+```
