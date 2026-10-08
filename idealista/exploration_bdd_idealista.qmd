@@ -1,0 +1,42 @@
+---
+title: "exploration_bdd_idealista"
+author: "Maëlie"
+format: html
+editor: visual
+---
+
+## Idealista data exploration
+
+```{r packages}
+
+library(aws.s3)
+library(readr)
+library(shiny)
+library(shinyWidgets)
+library(leaflet)
+library(dplyr)
+library(sf)
+library(stringr)
+library(purrr)
+library(tools)
+library(mapSpain)
+library(ggplot2)
+library(classInt)
+```
+
+```{r loading files}
+
+lire <- function(fichier) {
+  s3read_using(
+    FUN = read_csv,
+    object = paste0("idealista/", fichier),
+    bucket = "mperier",
+    opts = list(region = "", base_url = Sys.getenv("AWS_S3_ENDPOINT"))
+  )
+}
+
+idealista <- lire("202606_residential_metrics_idealistadata_v2.csv")
+
+```
+
+The `echo: false` option disables the printing of code (only output is displayed).
