@@ -10,17 +10,24 @@ editor: visual
 
 library(aws.s3)
 library(readr)
+library(readxl)
 library(shiny)
 library(shinyWidgets)
 library(leaflet)
 library(dplyr)
+library(tidyr)
 library(sf)
 library(stringr)
+library(stringi)
 library(purrr)
 library(tools)
 library(mapSpain)
 library(ggplot2)
 library(classInt)
+library(flextable)
+library(officer)
+library(janitor)
+
 ```
 
 ```{r loading db}
@@ -31,11 +38,22 @@ lire <- function(fichier) {
     FUN = read_csv2,
     object = paste0("turismo/", fichier),
     bucket = "mperier",
-    opts = list(region = "", base_url = Sys.getenv("AWS_S3_ENDPOINT"))
+    opts = list(region = "", base_url = Sys.getenv("AWS_S3_ENDPOINT")),
+    locale = locale(decimal_mark = ",", grouping_mark = "."),
+    na = c("", "NA", "..")
   )
 }
 
-v_tur_municipios <- lire("vivienda_tur_municipios.csv") %>% mutate(Total = round(as.numeric(Total)))
+poblacion_muni <- s3read_using(
+  FUN    = read_excel,
+  object = "turismo/ieca_export(1).xls",
+  bucket = "mperier",
+  opts   = list(region = "", base_url = Sys.getenv("AWS_S3_ENDPOINT"))
+)
+
+
+poblacion_muni <- row_to_names(poblacion_muni, row_number = 7) %>% rename(TOTAL = "2025")
+v_tur_municipios <- lire("vivienda_tur_municipios.csv") %>% mutate(Total = round(as.numeric(Total))) 
 v_tur_prov <- lire("vivienda_tur_prov.csv")%>% mutate(Total = round(as.numeric(Total)))
 v_tur_pctge <- lire("vivienda_tur_%.csv") %>% mutate(Total = as.numeric(Total))
 ```
@@ -67,7 +85,7 @@ for (n in noms) {
 ```
 
 ```{r}
-v_tur_andalucia <- v_tur_municipios %>% filter(str_starts(CCAA,"01"))
+#v_tur_andalucia <- v_tur_municipios %>% filter(str_starts(CCAA,"01"))
 ```
 
 ```{r download map}
@@ -120,6 +138,7 @@ carte_prov <- function(carte,
                        nom_leg   = "Number",
                        palette   = "Reds",
                        titre     = "",
+                       sous_titre = NULL,
                        prefixe   = "",
                        suffixe   = "",
                        n_classes = 4) {
@@ -131,6 +150,13 @@ carte_prov <- function(carte,
     mutate(etiquette = paste0(ine.prov.name, "\n", prefixe,
                               format(valor, big.mark = " ", trim = TRUE),
                               suffixe))
+  
+  # Ajout : proportion entre parenthèses, si la colonne pct existe
+  if ("pct" %in% names(carte)) {
+    carte <- carte |>
+      mutate(etiquette = ifelse(is.na(pct), etiquette,
+                                paste0(etiquette, "\n", " (", round(pct, 1), " %)")))
+  }
   
   if (legende == "classes") {
     bornes <- unique(classIntervals(carte$valor, n = n_classes, style = "jenks")$brks)
@@ -150,16 +176,26 @@ carte_prov <- function(carte,
   
   p +
     geom_sf_text(aes(label = etiquette),
-                 size = 2.3, lineheight = 0.9, color = "grey15") +
+                 size = 2.3, lineheight = 0.9, color = "black") +
     theme_void(base_size = 10) +
-    labs(title = titre)
+    labs(title = titre, subtitle = sous_titre)
 }
 
 
-# Map 1 : nmb of vtur 2026
-carte_prov(joindre(df_niveau(v_tur_prov, "2026-05-01")),
-           nom_leg = "Number",
-           titre   = "Number of touristic housing per province in 2026")
+# Map 1 : nombre de viviendas turísticas en 2026 (avec % entre parenthèses)
+
+df_pct <- df_niveau(v_tur_pctge, "2026-05-01") |>
+  rename(pct = valor)
+
+carte1 <- joindre(df_niveau(v_tur_prov, "2026-05-01")) |>
+  left_join(df_pct, by = c("cpro" = "Provincia_codigo"))
+
+carte_prov(carte1,
+           nom_leg = "Número",
+           titre   = "Número de viviendas turísticas por provincia", 
+           sous_titre = "(Proporción de viviendas turísticas sobre el total de viviendas)")
+
+
 # Map 2 : ∆ of vtur 2020-2026
 carte_prov(joindre(df_evolution(v_tur_prov)),
            nom_leg = "Growth (%)", prefixe = "+", suffixe = " %",
@@ -173,103 +209,188 @@ carte_prov(joindre(df_niveau(v_tur_pctge, "2026-05-01")),
            titre   = "Share of touristic housing in total housing per province in 2026")
 ```
 
-```{r por municipio}
+```{r table province}
+
+
+```
+
+```{r joindre poblacion}
 
 base_andalucia_munic <- function(base) {
   base <- base |>
-    filter(CCAA == "01",
-           !is.na(Provincia_codigo),
-           !is.na(codigo_postal),
-           !is.na(Total))
-  
+    filter(CCAA == "01", !is.na(Provincia_codigo),
+           !is.na(codigo_postal), !is.na(Total))
   if ("Viviendas y plazas" %in% names(base)) {
     base <- base |> filter(`Viviendas y plazas` == "Viviendas turísticas")
   }
   base
 }
 
-
-df_niveau_munic <- function(base, d) {
-  base_andalucia_munic(base) |>
-    filter(date == as.Date(d)) |>
-    select(codigo_postal, valor = Total)
-}
-
-df_evolution_munic <- function(base) {
-  base_andalucia_munic(base) |>
-    group_by(codigo_postal) |>
-    arrange(date, .by_group = TRUE) |>
-    summarise(valor = round((last(Total) - first(Total)) / first(Total) * 100, 1))
-}
-
-joindre <- function(df) {
+joindre_munic <- function(df) {
   munic_andalucia |> left_join(df, by = c("LAU_CODE" = "codigo_postal"))
 }
 
-# Preparation of the map 
+norm <- function(x) {
+  x <- stri_trans_general(x, "Latin-ASCII")
+  x <- tolower(trimws(x))
+  x <- gsub("\\s*\\(capital\\)", "", x)                         # "granada (capital)" -> "granada"
+  x <- sub("^(.*),\\s*(el|la|los|las)$", "\\2 \\1", x)          # "tres villas, las" -> "las tres villas"
+  #x <- gsub("-", " ", x)                                        # "zarza-perrunal" = "zarza perrunal"
+  gsub("\\s+", " ", trimws(x))
+}
 
+pop <- poblacion_muni |>
+  transmute(nom = norm(`Lugar de residencia`),
+            poblacion = as.numeric(TOTAL)) |>
+  filter(!is.na(poblacion))
+
+# Viviendas turísticas à la date voulue
+viv <- base_andalucia_munic(v_tur_municipios) |>
+  filter(date == as.Date("2026-05-01")) |>
+  transmute(codigo_postal,
+            Municipios = substring(Municipios, 7),
+            nom = norm(Municipios),
+            viviendas = Total)
+
+tab_base <- viv |>
+  left_join(pop, by = "nom") |>
+  mutate(ratio = round(viviendas / poblacion * 1000, 2))   # pour 1000 habitants (en %)
+
+
+
+
+```
+
+```{r carte por municipio}
 carte_muni <- function(carte,
-                       legende   = c("continu", "classes"),
-                       nom_leg   = "Number",
-                       palette   = "Reds",
-                       titre     = "",
-                       prefixe   = "",
-                       suffixe   = "",
-                       n_classes = 4) {
+                       legende = c("continu", "classes"),
+                       nom_leg = "Number",
+                       palette = "Reds",
+                       titre   = "",
+                       source  = NULL,
+                       bornes  = c(0, 1, 2, 5, 10, 25, Inf),
+                       encadre = NULL) {
   
   legende <- match.arg(legende)
   
-  # Étiquettes : nom + valeur
-  
-  #carte <- carte |>
-   # mutate(etiquette = paste0(ine.prov.name, "\n", prefixe,
-    #                          format(valor, big.mark = " ", trim = TRUE),
-     #                         suffixe))
-
   if (legende == "classes") {
-    bornes <- unique(classIntervals(carte$valor, n = n_classes, style = "jenks")$brks)
+    
+    etiq <- paste0(head(bornes, -1), "-", tail(bornes, -1))
+    etiq[length(etiq)] <- paste0(">", tail(head(bornes, -1), 1))
+    
     carte <- carte |>
-      mutate(classe = cut(valor, breaks = bornes, include.lowest = TRUE, dig.lab = 6))
+      mutate(classe = cut(valor, breaks = bornes, labels = etiq,
+                          include.lowest = TRUE, right = TRUE))
     
     p <- ggplot(carte) +
-      geom_sf(aes(fill = classe), color = "white", linewidth = 0.3) +
+      geom_sf(aes(fill = classe)) +
       scale_fill_brewer(palette = palette, na.value = "grey90",
                         name = nom_leg, drop = FALSE)
   } else {
     p <- ggplot(carte) +
-      geom_sf(aes(fill = valor), color = "white", linewidth = 0.3) +
+      geom_sf(aes(fill = valor)) +
       scale_fill_distiller(palette = palette, direction = 1,
                            na.value = "grey90", name = nom_leg)
   }
   
-  p +
-    #geom_sf_text(aes(
-      #label = etiquette
-     # ),
-      #           size = 2.3, lineheight = 0.9, color = "grey15") +
+  p <- p +
     theme_void(base_size = 10) +
-    labs(title = titre)
+    theme(plot.caption = element_text(size = 8, color = "grey30", hjust = 0)) +
+    labs(title = titre, caption = source)
+  
+  # Encadré : en haut à gauche (zone vide au nord de Huelva)
+  if (!is.null(encadre)) {
+    bb <- sf::st_bbox(carte)
+    p <- p +
+      annotate("label",
+               x = unname(bb["xmax"]), y = unname(bb["ymin"]),
+               label = encadre, hjust = 1, vjust = 0,
+               size = 3, lineheight = 1.1,
+               fill = "white", color = "grey20",
+               linewidth = 0.3, label.padding = unit(0.5, "lines"))
+  }
+  p
 }
 
-
-# Map 1 : nmb of vtur 2026
-carte_muni(joindre(df_niveau_munic(v_tur_municipios, "2026-05-01")),
+carte_muni(joindre_munic(tab_base |> select(codigo_postal, valor = ratio)),
            legende = "classes",
-           nom_leg = "Numero",
-           titre   = "Numero des viviendas turísticas por provincia en 2026")
+           bornes  = bornes <- c(0, 1, 2, 5, 10, 25, Inf),
+           nom_leg = "Viviendas turísticas\npor 1000 hab.",
+           titre   = "Viviendas turísticas por cada 1000 habitantes, 2026",
+           source  = "Fuente: INE, IECA", 
+           encadre = "Andalucía\n90 649 viviendas turísticas\n8 666 412 habitantes\n(10,5 por 1.000 hab.)")
 
-# Map 2 : ∆ of vtur 2020-2026
-carte_muni(joindre(df_evolution_munic(v_tur_municipios)),
-           nom_leg = "Growth (%)", prefixe = "+", suffixe = " %",
-           titre   = "Growth in touristic housing per province, 2020 to 2026 (%)")
 
-# Map 3 : share of housing that is touristic 
+```
 
-carte_prov(joindre(df_niveau(v_tur_pctge, "2026-05-01")),
-           nom_leg = "Share (%)", suffixe = " %",
-           palette = "Reds",
-           titre   = "Share of touristic housing in total housing per province in 2026")
+```{r table of top vt per municipio}
 
+
+set_flextable_defaults(na_str = "", font.size = 10)
+
+# 1. Top 10 selon le ratio pour 1 000 habitants
+top10 <- tab_base |>
+  filter(!is.na(ratio), poblacion >= 1000) |>
+  slice_max(ratio, n = 10, with_ties = FALSE) |>
+  select(codigo_postal, Municipios, poblacion, ratio)
+
+# 2. Une date de référence par année : août si elle existe, sinon mai
+dates_ref <- v_tur_municipios |>
+  distinct(date) |>
+  mutate(annee = year(date), mois = month(date)) |>
+  filter(mois %in% c(5, 8)) |>
+  group_by(annee) |>
+  slice_max(mois, n = 1) |>      # 8 > 5 : août gagne s'il est présent
+  ungroup()
+
+# 3. Nombre de viviendas turísticas à ces dates, pour les 10 communes
+evo <- base_andalucia_munic(v_tur_municipios) |>
+  filter(codigo_postal %in% top10$codigo_postal,
+         date %in% dates_ref$date) |>
+  mutate(annee = year(date),
+         Total = ifelse(Total == 1, NA, Total)) %>%
+  select(codigo_postal, annee, Total)
+
+annees <- sort(unique(evo$annee))
+
+# 4. Tableau : une colonne par année
+a_min <- as.character(min(annees))
+a_max <- as.character(max(annees))
+
+tab <- evo |>
+  pivot_wider(names_from = annee, values_from = Total) |>
+  select(codigo_postal, all_of(as.character(annees))) |>
+  left_join(top10, by = "codigo_postal") |>
+  arrange(desc(ratio)) |>
+  mutate(aug = ifelse(is.na(.data[[a_min]]) | is.na(.data[[a_max]]), "",
+                      sprintf("%+.0f %%",
+                              (.data[[a_max]] - .data[[a_min]]) / .data[[a_min]] * 100)),
+         ratio = round(ratio, 1)) |>
+  select(Municipios, all_of(as.character(annees)), aug, poblacion, ratio)
+
+note <- "Datos de agosto de 2020 a 2024; de mayo a partir de 2025."
+
+ft <- flextable(tab) |>
+  set_header_labels(Municipios = "Municipio",
+                    aug        = "Variación (2020-2026)",
+                    poblacion  = "Población (2025)",
+                    ratio      = "Por 1.000 hab.") |>
+  colformat_num(j = c(as.character(annees), "poblacion"),
+                big.mark = " ", digits = 0) |>
+  theme_booktabs() |>
+  add_header_lines("Viviendas turísticas en los 10 municipios andaluces con mayor tasa por 1.000 habitantes") |>
+  bold(i = 1, part = "header") |>
+  fontsize(i = 1, size = 12, part = "header") |>
+  align(i = 1, align = "left", part = "header") |>
+  add_footer_lines(c(note, "Fuente: INE, IECA")) |> 
+  fontsize(size = 8, part = "footer") |>
+  color(color = "grey40", part = "footer") |>
+  italic(part = "footer") |>
+  autofit()
+
+ft 
+dir.create("data/output", showWarnings = FALSE)
+save_as_image(ft, path = "tabla_top10.png", res = 200)
 ```
 
 ```{r evolution map}
