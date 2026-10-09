@@ -1,0 +1,141 @@
+---
+title: "explore_bdd_airbnb"
+author: "Maëlie Perier"
+format: html
+editor: visual
+---
+
+```{r}
+
+library(aws.s3)
+library(jsonlite)
+library(readr)
+library(readxl)
+library(shiny)
+library(shinyWidgets)
+library(leaflet)
+library(dplyr)
+library(tidyr)
+library(sf)
+library(stringr)
+library(stringi)
+library(purrr)
+library(tools)
+library(mapSpain)
+library(ggplot2)
+library(ggspatial)
+library(classInt)
+library(flextable)
+library(officer)
+library(janitor)
+
+```
+
+```{r}
+
+lire <- function(fichier) {
+  s3read_using(
+    FUN = read_csv,
+    object = paste0("airbnb/barcelona/", fichier),
+    bucket = "mperier",
+    opts = list(region = "", base_url = Sys.getenv("AWS_S3_ENDPOINT"))
+  )
+}
+
+lire_geojson <- function(fichier) {
+  s3read_using(
+    FUN = sf::read_sf,
+    object = paste0("airbnb/barcelona/", fichier),
+    bucket = "mperier",
+    opts = list(region = "", base_url = Sys.getenv("AWS_S3_ENDPOINT"))
+  )
+}
+
+
+barcelona_bb_total <- lire("listings.csv") 
+# barcelona_mapping <- lire("neighbourhoods.csv") -> mapping entre neighborhood group and name of naighborhood but this info is also in next db
+barcelona_neigh <- lire_geojson("neighbourhoods.geojson")
+```
+
+```{r clean data}
+
+# Keep recent listings (since 2024)
+
+barcelona_bb <- barcelona_bb_total %>% filter(last_review >= as.Date("2024-01-01"))
+
+# Transform as sf & ajouter le multipolygone du quartier. L'intersection se fait par appartenance du pt dans le polygone (par la géo et non par le nom du quartier => plus robuste)
+
+sf_use_s2(FALSE)
+
+neigh_poly <- barcelona_neigh %>%
+  st_transform(4326) %>%
+  st_make_valid() %>%                 
+  select(neighbourhood_neigh = neighbourhood, geometry) %>%
+  mutate(neigh_geom = geometry)
+
+all(st_is_valid(neigh_poly))
+
+barcelona_sf <- barcelona_bb %>%
+  st_as_sf(coords = c("longitude", "latitude"), crs=4326) %>% st_join(neigh_poly, join = st_within)
+
+sf_use_s2(TRUE)
+
+
+```
+
+```{r}
+
+comptes <- barcelona_bb %>%
+  count(neighbourhood, name = "n_annonces")
+
+carte_data <- barcelona_neigh %>%
+  st_transform(4326) %>%
+  st_make_valid() %>%
+  left_join(comptes, by = "neighbourhood") %>%
+  mutate(n_annonces = coalesce(n_annonces, 0L))   # quartiers sans annonce = 0
+
+ggplot(carte_data) +
+  geom_sf(aes(fill = n_annonces), color = "white", linewidth = 0.2) +
+  scale_fill_viridis_c(
+    option = "rocket", direction = -1,
+    trans = "pseudo_log",
+    breaks = c(0, 10, 50, 200, 500, 1500),
+    name = "Anuncios"
+  ) +
+  annotation_scale(location = "bl", width_hint = 0.25, style = "ticks") +
+  annotation_north_arrow(
+    location = "tr", which_north = "true",
+    style = north_arrow_fancy_orienteering(),
+    height = unit(1.5, "cm"), width = unit(1.5, "cm")
+  ) +  labs(title = "Numero de annuncios Airbnb , Barcelone") +
+  theme_void()
+
+
+
+```
+
+```{r aribnb per km2 map}
+
+sf_use_s2(FALSE)
+
+carte_density <- carte_data %>%
+  mutate(densite = n_annonces / (as.numeric(st_area(geometry)) / 1e6))
+
+ggplot(carte_density) +
+  geom_sf(aes(fill = densite), color = "white", linewidth = 0.2) +
+  scale_fill_viridis_c(
+    option = "rocket", direction = -1,
+#    trans = "pseudo_log",
+#    breaks = c(0, 10, 50, 200, 500, 1500),
+    name = "Anuncios / km2"
+  ) +
+  annotation_scale(location = "bl", width_hint = 0.25, style = "ticks") +
+  annotation_north_arrow(
+    location = "tr", which_north = "true",
+    style = north_arrow_fancy_orienteering(),
+    height = unit(1.5, "cm"), width = unit(1.5, "cm")
+  ) +  labs(title = "Density of airbnb per km2 , Barcelone") +
+  theme_void()
+sf_use_s2(TRUE)
+
+```

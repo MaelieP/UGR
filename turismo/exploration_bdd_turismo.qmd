@@ -51,6 +51,13 @@ poblacion_muni <- s3read_using(
   opts   = list(region = "", base_url = Sys.getenv("AWS_S3_ENDPOINT"))
 )
 
+poblacion_prov <- s3read_using(
+  FUN    = read_excel,
+  object = "turismo/pob_provinciaandalucia.xlsx",
+  bucket = "mperier",
+  opts   = list(region = "", base_url = Sys.getenv("AWS_S3_ENDPOINT"))
+) %>% mutate(Provincia_codigo = str_pad(as.character(Provincia_codigo), width = 2, pad = "0"))
+#poblacion_prov <- poblacion_prov[-(1:7), ] 
 
 poblacion_muni <- row_to_names(poblacion_muni, row_number = 7) %>% rename(TOTAL = "2025")
 v_tur_municipios <- lire("vivienda_tur_municipios.csv") %>% mutate(Total = round(as.numeric(Total))) 
@@ -82,10 +89,6 @@ for (n in noms) {
   
   assign(n, bdd, envir = .GlobalEnv)
 }
-```
-
-```{r}
-#v_tur_andalucia <- v_tur_municipios %>% filter(str_starts(CCAA,"01"))
 ```
 
 ```{r download map}
@@ -212,6 +215,57 @@ carte_prov(joindre(df_niveau(v_tur_pctge, "2026-05-01")),
 ```{r table province}
 
 
+set_flextable_defaults(na_str = "", font.size = 10)
+
+d <- "2026-05-01"
+
+# 1. Nombre de viviendas turísticas (v_tur_prov)
+viv_prov <- df_niveau(v_tur_prov, d) |>
+  rename(viviendas = valor)
+
+viv_2020 <- df_niveau(v_tur_prov, "2020-08-01") |>
+  rename(viviendas_2020 = valor)
+
+# 2. % de viviendas turísticas sur le total (v_tur_pctge)
+pct_prov <- df_niveau(v_tur_pctge, d) |>
+  rename(pct = valor)
+
+# 4. Noms des provinces
+noms <- sf::st_drop_geometry(prov_andalucia) |>
+  select(Provincia_codigo = cpro, Provincia = ine.prov.name)
+
+# 5. Tableau
+tab_prov <- noms |>
+  left_join(viv_prov, by = "Provincia_codigo") |>
+  left_join(viv_2020,  by = "Provincia_codigo") |>
+  left_join(pct_prov, by = "Provincia_codigo") |>
+  left_join(poblacion_prov %>% select(!"Provincia"), by = "Provincia_codigo") |>
+  mutate(por1000 = round(viviendas / TOTAL * 1000, 1),
+         aug     = (viviendas - viviendas_2020) / viviendas_2020 * 100) |>
+  arrange(desc(viviendas)) |>
+  select(Provincia, viviendas, pct, por1000, aug)
+
+ft_prov <- flextable(tab_prov) |>
+  set_header_labels(Provincia = "Provincia",
+                    viviendas = "Viviendas turísticas",
+                    pct       = "% del total de viviendas",
+                    por1000   = "Por 1.000 hab.",
+                    aug       = "Variación* 2020-2026") |>
+  colformat_num(j = "viviendas", big.mark = " ", digits = 0) |>
+  colformat_num(j = c("pct", "por1000"), digits = 1) |>
+  set_formatter(aug = function(x) ifelse(is.na(x), "", sprintf("%+.0f %%", x))) |>
+  theme_booktabs() |>
+  add_header_lines("Viviendas turísticas por provincia de Andalucía, 2026") |>
+  bold(i = 1, part = "header") |>
+  fontsize(i = 1, size = 12, part = "header") |>
+  align(i = 1, align = "left", part = "header") |>  
+  add_footer_lines(c("*Variación de número de viviendas turísticas", "Fuente: INE, IECA")) |>  fontsize(size = 8, part = "footer") |>
+  color(color = "grey40", part = "footer") |>
+  autofit()
+
+ft_prov
+
+save_as_image(ft, path = "tur_prov.png", res = 200)
 ```
 
 ```{r joindre poblacion}
@@ -233,9 +287,8 @@ joindre_munic <- function(df) {
 norm <- function(x) {
   x <- stri_trans_general(x, "Latin-ASCII")
   x <- tolower(trimws(x))
-  x <- gsub("\\s*\\(capital\\)", "", x)                         # "granada (capital)" -> "granada"
-  x <- sub("^(.*),\\s*(el|la|los|las)$", "\\2 \\1", x)          # "tres villas, las" -> "las tres villas"
-  #x <- gsub("-", " ", x)                                        # "zarza-perrunal" = "zarza perrunal"
+  x <- gsub("\\s*\\(capital\\)", "", x)                         
+  x <- sub("^(.*),\\s*(el|la|los|las)$", "\\2 \\1", x)  
   gsub("\\s+", " ", trimws(x))
 }
 
@@ -388,7 +441,8 @@ ft <- flextable(tab) |>
   italic(part = "footer") |>
   autofit()
 
-ft 
+ft |> font(fontname = "Calibri", part = "all")
+
 dir.create("data/output", showWarnings = FALSE)
 save_as_image(ft, path = "tabla_top10.png", res = 200)
 ```
