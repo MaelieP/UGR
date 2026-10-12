@@ -265,7 +265,7 @@ ft_prov <- flextable(tab_prov) |>
 
 ft_prov
 
-save_as_image(ft, path = "tur_prov.png", res = 200)
+save_as_image(ft_prov, path = "tur_prov.png", res = 200)
 ```
 
 ```{r joindre poblacion}
@@ -322,9 +322,12 @@ carte_muni <- function(carte,
                        titre   = "",
                        source  = NULL,
                        bornes  = c(0, 1, 2, 5, 10, 25, Inf),
-                       encadre = NULL) {
+                       encadre = NULL,
+                       encadre_pos = c("haut_gauche", "bas_gauche",
+                                       "bas_droite", "haut_droite")) {
   
-  legende <- match.arg(legende)
+  legende     <- match.arg(legende)
+  encadre_pos <- match.arg(encadre_pos)
   
   if (legende == "classes") {
     
@@ -338,26 +341,55 @@ carte_muni <- function(carte,
     p <- ggplot(carte) +
       geom_sf(aes(fill = classe)) +
       scale_fill_brewer(palette = palette, na.value = "grey90",
-                        name = nom_leg, drop = FALSE)
+                        name = nom_leg, drop = FALSE) +
+      guides(fill = guide_legend(nrow = 1, byrow = TRUE,
+                                 title.position = "left",
+                                 label.position = "bottom"))
+    larg_cle <- unit(1.5, "cm")
+    
   } else {
     p <- ggplot(carte) +
       geom_sf(aes(fill = valor)) +
       scale_fill_distiller(palette = palette, direction = 1,
-                           na.value = "grey90", name = nom_leg)
+                           na.value = "grey90", name = nom_leg) +
+      guides(fill = guide_colourbar(direction = "horizontal",
+                                    title.position = "left"))
+    larg_cle <- unit(7, "cm")
   }
   
   p <- p +
+    coord_sf(expand = FALSE) +                       
+    labs(title = titre, caption = source) +
     theme_void(base_size = 10) +
-    theme(plot.caption = element_text(size = 8, color = "grey30", hjust = 0)) +
-    labs(title = titre, caption = source)
+    theme(
+      plot.title.position   = "plot",                 
+      plot.caption.position = "plot",
+      plot.caption = element_text(size = 8, color = "grey30", hjust = 0),
+      plot.margin  = margin(4, 4, 4, 4),
+      
+      legend.position   = "bottom",
+      legend.direction  = "horizontal",
+      legend.title      = element_text(size = 9, vjust = 0.5),
+      legend.key.width  = larg_cle,
+      legend.key.height = unit(0.35, "cm"),
+      legend.key.spacing.x = unit(0, "pt"),          
+      legend.margin     = margin(0, 0, 0, 0),
+      legend.box.margin = margin(2, 0, 0, 0)
+    )
   
-  # Encadré : en haut à gauche (zone vide au nord de Huelva)
+  # Encadré : coin choisi de la zone de la carte
   if (!is.null(encadre)) {
     bb <- sf::st_bbox(carte)
+    pos <- switch(encadre_pos,
+                  haut_gauche = list(x = bb["xmin"], y = bb["ymax"], h = 0, v = 1),
+                  bas_gauche  = list(x = bb["xmin"], y = bb["ymin"], h = 0, v = 0),
+                  bas_droite  = list(x = bb["xmax"], y = bb["ymin"], h = 1, v = 0),
+                  haut_droite = list(x = bb["xmax"], y = bb["ymax"], h = 1, v = 1))
+    
     p <- p +
       annotate("label",
-               x = unname(bb["xmax"]), y = unname(bb["ymin"]),
-               label = encadre, hjust = 1, vjust = 0,
+               x = unname(pos$x), y = unname(pos$y),
+               label = encadre, hjust = pos$h, vjust = pos$v,
                size = 3, lineheight = 1.1,
                fill = "white", color = "grey20",
                linewidth = 0.3, label.padding = unit(0.5, "lines"))
@@ -365,15 +397,34 @@ carte_muni <- function(carte,
   p
 }
 
-carte_muni(joindre_munic(tab_base |> select(codigo_postal, valor = ratio)),
-           legende = "classes",
-           bornes  = bornes <- c(0, 1, 2, 5, 10, 25, Inf),
-           nom_leg = "Viviendas turísticas\npor 1000 hab.",
-           titre   = "Viviendas turísticas por cada 1000 habitantes, 2026",
-           source  = "Fuente: INE, IECA", 
-           encadre = "Andalucía\n90 649 viviendas turísticas\n8 666 412 habitantes\n(10,5 por 1.000 hab.)")
+# Hauteur déduite de la largeur fixée (pour que la carte remplisse la largeur)
+haut_cm <- function(carte, largeur_cm, extra_cm = 3) {
+  bb  <- sf::st_bbox(carte)
+  asp <- as.numeric((bb["ymax"] - bb["ymin"]) / (bb["xmax"] - bb["xmin"]))
+  if (isTRUE(sf::st_is_longlat(carte)))
+    asp <- asp / cos(mean(c(bb["ymin"], bb["ymax"])) * pi / 180)
+  asp * largeur_cm + extra_cm   # extra_cm = titre + légende + source
+}
 
 
+
+bornes <- c(0, 1, 2, 5, 10, 25, Inf)
+carte  <- joindre_munic(tab_base |> select(codigo_postal, valor = ratio))
+
+p <- carte_muni(carte,
+                legende = "classes",
+                bornes  = bornes,
+                nom_leg = "Viviendas turísticas por 1000 hab.",   # sans \n
+                titre   = "Viviendas turísticas por cada 1000 habitantes (2026)",
+                source  = "Fuente: INE, 2026 y IECA, 2025",
+                encadre = NULL,
+                  #"Andalucía\n90 649 viviendas turísticas\n8 666 412 habitantes\n(10,5 por 1.000 hab.)",
+                encadre_pos = "haut_gauche")
+
+p
+
+ggsave("v_muni.png", p, width = 16, height = haut_cm(carte, 16),
+       units = "cm", dpi = 300)
 ```
 
 ```{r table of top vt per municipio}
