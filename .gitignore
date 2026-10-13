@@ -7,3 +7,9 @@
 *.csv
 !Panel_Hogares_content.csv
 *.txt
+*.rds
+*.shp
+*.dbf
+*.prj
+*.shx
+*.CPG
