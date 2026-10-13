@@ -1,0 +1,101 @@
+---
+title: "turismo_districto"
+author: "Maëlie Perier"
+format: html
+editor: visual
+---
+
+## Viviendas turísticas por districto
+
+```{r packages}
+
+library(aws.s3)
+library(readr)
+library(readxl)
+library(shiny)
+library(shinyWidgets)
+library(leaflet)
+library(dplyr)
+library(tidyr)
+library(sf)
+library(stringr)
+library(stringi)
+library(purrr)
+library(tools)
+library(mapSpain)
+library(ggplot2)
+library(classInt)
+#library(flextable)
+library(officer)
+library(janitor)
+```
+
+```{r}
+
+
+
+t_distrito <- s3read_using(
+  FUN      = readxl::read_xlsx,
+  sheet    = 2,
+  object   = "turismo/exp_viv_turistica_tabla5_MAY2026.xlsx",
+  bucket   = "mperier",
+  opts   = list(region = "", base_url = Sys.getenv("AWS_S3_ENDPOINT"))
+) %>% select(c("CUDIS", "Nivel", "vivienda turistica", "plazas", "plazas por vivienda turistica", "Porcentaje vivienda turistica", "PERIODO", "PROV", "PROV_LITERAL", "MUN", "MUN_LITERAL"))
+
+
+
+```
+
+Joining districts with their geographical borders. We know the polygone for each census tract so we reconstruct distritos geography from that.
+
+```{r frontières géo}
+base <- "turismo/secciones2026_geo/SECC_CE_20260101"   # sans extension
+dir.create("shp_tmp", showWarnings = FALSE)
+
+
+for (ext in c("shp", "dbf", "shx", "prj", "CPG")) {
+  dest <- file.path("shp_tmp", paste0("SECC_CE_20260101.", ext))
+  
+  tryCatch(
+    s3read_using(
+      FUN    = function(f, dest) file.copy(f, dest, overwrite = TRUE),
+      dest   = dest,
+      object = paste0(base, ".", ext),
+      bucket = "mperier",
+      opts   = list(region = "", base_url = Sys.getenv("AWS_S3_ENDPOINT"))
+    ),
+    error = function(e) message("Échec pour .", ext, " : ", conditionMessage(e))
+  )
+}
+
+list.files("shp_tmp")
+
+
+secc <- st_read("shp_tmp/SECC_CE_20260101.shp")
+names(secc)   
+
+# 1. Réparer les géométries invalides avant toute fusion
+secc <- st_make_valid(secc)
+
+# 3. Dissoudre : regrouper par distrito
+distritos <- secc |>
+  group_by(CUDIS) |>
+  summarise(geometry = st_union(geometry), .groups = "drop")
+
+# 4. Vérifications 
+nrow(distritos) # Il en manque 8 : "4316101" "3601302" "3602503" "3208902" "2523403" "2301803" "0814102" "0407002" 
+# pour les voir anti_join(t_distrito, st_drop_geometry(distritos),by = c("CUDIS" = "CUDIS"))
+plot(st_geometry(distritos))
+all(st_is_valid(distritos))
+
+sf_distritos <- t_distrito %>% left_join(distritos, by = "CUDIS")
+rm(distritos)
+```
+
+```{r}
+
+
+
+```
+
+The `echo: false` option disables the printing of code (only output is displayed).
