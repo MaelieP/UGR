@@ -12,7 +12,6 @@ editor: visual
 library(aws.s3)
 library(readr)
 library(shiny)
-library(shinyWidgets)
 library(leaflet)
 library(dplyr)
 library(sf)

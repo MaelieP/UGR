@@ -13,7 +13,6 @@ library(aws.s3)
 library(readr)
 library(readxl)
 library(shiny)
-library(shinyWidgets)
 library(leaflet)
 library(dplyr)
 library(tidyr)
@@ -32,18 +31,73 @@ library(janitor)
 
 ```{r}
 
+endpoint <- sub("^https?://", "", Sys.getenv("AWS_S3_ENDPOINT"))
 
-
-t_distrito <- s3read_using(
-  FUN      = readxl::read_xlsx,
-  sheet    = 2,
-  object   = "turismo/exp_viv_turistica_tabla5_MAY2026.xlsx",
+objs <- get_bucket_df(
   bucket   = "mperier",
-  opts   = list(region = "", base_url = Sys.getenv("AWS_S3_ENDPOINT"))
-) %>% select(c("CUDIS", "Nivel", "vivienda turistica", "plazas", "plazas por vivienda turistica", "Porcentaje vivienda turistica", "PERIODO", "PROV", "PROV_LITERAL", "MUN", "MUN_LITERAL"))
+  prefix   = "turismo/exp_viv_turistica_tabla5_",
+  base_url = endpoint,
+  region   = "",
+  max      = Inf
+)
+
+fichiers <- grep("exp_viv_turistica_tabla5_[A-Z]{3}[0-9]{4}\\.xlsx$",
+                 objs$Key, value = TRUE)
+fichiers 
 
 
+# Table de correspondance : nom en minuscules -> nom de référence
+noms_ref <- c(
+  "CODIGO"                        = "CUDIS",
+  "codigo"                        = "CUDIS",
+  "cudis"                         = "CUDIS",
+  "nivel"                         = "Nivel",
+  "nota1"                         = "NOTA1",
+  "vivienda turistica"            = "vivienda turistica",
+  "unidad1"                       = "unidad1",
+  "nota2"                         = "nota2",
+  "plazas"                        = "plazas",
+  "unidad2"                       = "unidad2",
+  "nota3"                         = "nota3",
+  "plazas por vivienda turistica" = "plazas por vivienda turistica",
+  "plaza por vivienda turistica"  = "plazas por vivienda turistica",
+  "unidad3"                       = "unidad3",
+  "nota4"                         = "nota4",
+  "porcentaje vivienda turistica" = "Porcentaje vivienda turistica",
+  "unidad4"                       = "UNIDAD4",
+  "periodo"                       = "PERIODO",
+  "prov"                          = "PROV",
+  "prov_literal"                  = "PROV_LITERAL",
+  "mun"                           = "MUN",
+  "mun_literal"                   = "MUN_LITERAL"
+)
 
+harmoniser <- function(df) {
+  nouveaux <- unname(noms_ref[tolower(names(df))])
+  # si un nom est inconnu, on garde l'original plutôt que de produire un NA
+  names(df) <- ifelse(is.na(nouveaux), names(df), nouveaux)
+  df
+}
+
+
+cols <- c("CUDIS", "Nivel", "vivienda turistica", "plazas",
+          "plazas por vivienda turistica", "Porcentaje vivienda turistica",
+          "PERIODO", "PROV", "PROV_LITERAL", "MUN", "MUN_LITERAL")
+
+t_distrito <- map_dfr(fichiers, function(f) {
+  s3read_using(
+    FUN    = readxl::read_xlsx,
+    sheet  = 2,
+    object = f,
+    bucket = "mperier",
+    opts   = list(region = "", base_url = Sys.getenv("AWS_S3_ENDPOINT"))
+  ) |>
+    harmoniser() |>
+    dplyr::select(all_of(cols)) |>
+    mutate(across(everything(), as.character),
+           fichier = basename(f))
+}) %>% arrange(CUDIS, PERIODO) %>%
+  relocate(PERIODO, .after = CUDIS)
 ```
 
 Joining districts with their geographical borders. We know the polygone for each census tract so we reconstruct distritos geography from that.
@@ -92,10 +146,74 @@ sf_distritos <- t_distrito %>% left_join(distritos, by = "CUDIS")
 rm(distritos)
 ```
 
-```{r}
+```{r seccion censal}
+
+endpoint <- sub("^https?://", "", Sys.getenv("AWS_S3_ENDPOINT"))
+
+objs <- get_bucket_df(
+  bucket   = "mperier",
+  prefix   = "turismo/exp_viv_turistica_tabla5_",
+  base_url = endpoint,
+  region   = "",
+  max      = Inf
+)
+
+fichiers <- grep("exp_viv_turistica_tabla5_[A-Z]{3}[0-9]{4}\\.xlsx$",
+                 objs$Key, value = TRUE)
+fichiers 
+
+noms_ref <- c(
+  "CODIGO"                        = "CUSEC",
+  "codigo"                        = "CUSEC",
+  "cusec"                         = "CUSEC",
+  "nivel"                         = "Nivel",
+  "nota1"                         = "NOTA1",
+  "vivienda turistica"            = "vivienda turistica",
+  "unidad1"                       = "unidad1",
+  "nota2"                         = "nota2",
+  "plazas"                        = "plazas",
+  "unidad2"                       = "unidad2",
+  "nota3"                         = "nota3",
+  "plazas por vivienda turistica" = "plazas por vivienda turistica",
+  "plaza por vivienda turistica"  = "plazas por vivienda turistica",
+  "unidad3"                       = "unidad3",
+  "nota4"                         = "nota4",
+  "porcentaje vivienda turistica" = "Porcentaje vivienda turistica",
+  "unidad4"                       = "UNIDAD4",
+  "periodo"                       = "PERIODO",
+  "prov"                          = "PROV",
+  "prov_literal"                  = "PROV_LITERAL",
+  "mun"                           = "MUN",
+  "mun_literal"                   = "MUN_LITERAL"
+)
+
+harmoniser <- function(df) {
+  nouveaux <- unname(noms_ref[tolower(names(df))])
+  # si un nom est inconnu, on garde l'original plutôt que de produire un NA
+  names(df) <- ifelse(is.na(nouveaux), names(df), nouveaux)
+  df
+}
 
 
+cols <- c("CUSEC", "Nivel", "vivienda turistica", "plazas",
+          "plazas por vivienda turistica", "Porcentaje vivienda turistica",
+          "PERIODO", "PROV", "PROV_LITERAL", "MUN", "MUN_LITERAL")
 
+t_seccion <- map_dfr(fichiers, function(f) {
+  s3read_using(
+    FUN    = readxl::read_xlsx,
+    sheet  = 3,
+    object = f,
+    bucket = "mperier",
+    opts   = list(region = "", base_url = Sys.getenv("AWS_S3_ENDPOINT"))
+  ) |>
+  harmoniser() |>
+  dplyr::select(all_of(cols)) |>
+  mutate(across(everything(), as.character),
+         fichier = basename(f))
+}) %>% arrange(CUSEC, PERIODO) %>%
+    relocate(PERIODO, .after = CUSEC)
+
+
+sf_seccion <- t_seccion %>% left_join((secc %>% select(c("CUSEC", CUDIS, geometry))), by = "CUSEC")
 ```
-
-The `echo: false` option disables the printing of code (only output is displayed).
