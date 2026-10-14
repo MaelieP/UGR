@@ -600,9 +600,7 @@ fwrite(rent_tr, file.path(OUT_DIR, "04_rental_income_transitions.csv"))
 message("Done. Panel: ", panel_file)
 
 ## Save panel ? 
-output_path <- paste0("s3://", bucket_name, "/mon_dossier/mon_fichier.parquet")
-
-# Enregistrement au format Parquet
-write_parquet(df, output_path)
-
-cat("DataFrame enregistré avec succès sur :", output_path, "\n")
+bucket <- s3_bucket("mperier", endpoint_override = Sys.getenv("AWS_S3_ENDPOINT"))
+sink <- bucket$OpenOutputStream("panel_persons_2016_2023.parquet")
+write_parquet(PANEL, sink, compression = "zstd")
+sink$close()
