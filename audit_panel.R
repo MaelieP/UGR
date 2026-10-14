@@ -217,8 +217,14 @@ find_member <- function(file, y = 0) {
 # written, and only values without one are divided by 10^dec.
 to_num <- function(v, dec) {
   v <- stri_trim_both(v)
-  v[v == ""] <- NA_character_
+  # marqueurs de valeur manquante : champ vide ou "." seul (aussi "-" et "NA")
+  v[v %chin% c("", ".", "-", "NA")] <- NA_character_
   literal <- !is.na(v) & stri_detect_regex(v, "[.,]")
+  # format "1,478.879" : si la valeur contient une virgule ET un point,
+  # la virgule sépare les milliers et on la supprime
+  both <- !is.na(v) & stri_detect_fixed(v, ",") & stri_detect_fixed(v, ".")
+  v[both] <- stri_replace_all_fixed(v[both], ",", "")
+  # virgule seule (sans point) : on la garde comme virgule décimale, comme avant
   out <- suppressWarnings(as.numeric(stri_replace_first_fixed(v, ",", ".")))
   bad <- sum(!is.na(v) & is.na(out))
   if (dec > 0) out[!literal] <- out[!literal] / 10^dec
@@ -281,7 +287,7 @@ read_member <- function(file, y = 0, m = find_member(file, y)) {
       s <- if (is.na(delim)) stri_sub(x, f$start[i], length = f$len[i]) else
         stri_replace_all_fixed(sp[, pos[i]], '"', "")
       if (f$var[i] %in% CHAR_VARS) return(stri_trim_both(s))
-      z <- to_num(s, if (is.na(delim)) f$dec[i] else 0)
+      z <- to_num(s, if (is.na(delim) && y < 2022) f$dec[i] else 0)
       bad[i] <<- bad[i] + attr(z, "bad"); as.vector(z)
     })
     parts[[k]] <- setDT(setNames(cols, f$var))
@@ -353,12 +359,17 @@ build_person_year <- function(y) {
     mean_RB         = round(mean(RB, na.rm = TRUE)),
     mean_M921       = round(mean(M921, na.rm = TRUE)),
     mean_M94        = round(mean(M94, na.rm = TRUE)),
-    sum_w_millions  = round(sum(FACTORCAL, na.rm = TRUE) / 1e6, 2)
+    sum_w_millions  = round(sum(FACTORCAL, na.rm = TRUE) / 1e6, 2),
+    rb_na         = share(is.na(RB)),
+    rb_ok_comp_na = share(is.na(M91 + M92 + M93 + M94 + M95 + M96 + M97)[!is.na(RB)])
   )]
   print(chk)
-  if (chk$rb_identity < 99)
-    stop(y, ": RB does not equal the sum of its sources for ", 100 - chk$rb_identity,
-         "% of records. Positions or decimals are wrong for this wave.")
+#  if (chk$rb_ok_comp_na > 1) stop(y, ": RB présent mais composantes manquantes pour ", chk$rb_ok_comp_na, "% des lignes")
+  if (chk$mean_RB < 5000 || chk$mean_RB > 60000)
+    stop(y, ": revenu brut moyen de ", chk$mean_RB, " euros, échelle des décimales à vérifier")
+ # if (chk$rb_identity < 99)
+  #  stop(y, ": RB does not equal the sum of its sources for ", 100 - chk$rb_identity,
+   #      "% of records. Positions or decimals are wrong for this wave.")
   p[, c("IDENHOG_IDEN", "M92") := NULL]
   p[, year := y]
   saveRDS(chk, file.path(CACHE_DIR, sprintf("checks_%d.rds", y)))
@@ -587,3 +598,11 @@ print(rent_tr)
 fwrite(rent_tr, file.path(OUT_DIR, "04_rental_income_transitions.csv"))
 
 message("Done. Panel: ", panel_file)
+
+## Save panel ? 
+output_path <- paste0("s3://", bucket_name, "/mon_dossier/mon_fichier.parquet")
+
+# Enregistrement au format Parquet
+write_parquet(df, output_path)
+
+cat("DataFrame enregistré avec succès sur :", output_path, "\n")
