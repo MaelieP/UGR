@@ -1,0 +1,66 @@
+---
+title: "panel_loc"
+author: "Maëlie"
+format: html
+editor: visual
+---
+
+```{r}
+library(data.table)
+library(stringi)
+```
+
+```{r}
+ARCHIVE <- "/home/onyxia/work/UGR/Panel_Hogares.rar"   # <- à adapter
+OUT     <- "~/work/UGR/panel_income_2016_2023"
+PANEL   <- readRDS(file.path(OUT, "panel_persons_2016_2023.rds"))
+```
+
+```{r}
+
+members <- system2("unrar", c("lb", shQuote(ARCHIVE)), stdout = TRUE)
+iden_member <- function(y) {
+  m <- grep(sprintf("(^|/|\\\\)_?1?1_IDEN_?%d(\\.txt)?$", y), members, ignore.case = TRUE, value = TRUE)
+  if (length(m) != 1) stop(y, " : ", length(m), " membres trouvés")
+  m
+}
+
+
+read_seccion <- function(y, chunk = 500000L) {
+  con <- pipe(sprintf("unrar p -inul %s %s", shQuote(ARCHIVE), shQuote(iden_member(y))), open = "r")
+  on.exit(close(con))
+  parts <- list(); k <- 0L
+  repeat {
+    x <- readLines(con, n = chunk, warn = FALSE, encoding = "latin1")
+    if (!length(x)) break
+    x <- stri_replace_last_regex(x, "\r$", "")
+    x <- x[nzchar(x)]
+    k <- k + 1L
+    parts[[k]] <- data.table(IDENPER = as.numeric(stri_sub(x, 1, length = 11)),
+                             IDENHOG = as.numeric(stri_sub(x, 12, length = 11)),
+                             SECCION = stri_trim_both(stri_sub(x, 132, length = 10)))
+  }
+  d <- rbindlist(parts); d[, year := y][]
+}
+
+SEC <- rbindlist(lapply(2016:2023, function(y) { message(y); read_seccion(y) }))
+SEC[, .(n = .N, idenper_na = sum(is.na(IDENPER))), by = year][order(year)]
+```
+
+The `echo: false` option disables the printing of code (only output is displayed).
+
+```{r}
+# 1. Jointure
+SEC[SECCION == "", SECCION := NA_character_]
+stopifnot(!anyDuplicated(SEC, by = c("IDENPER", "year")))
+PANEL[, SECCION := NULL]  # au cas où une ancienne tentative l'aurait ajoutée
+PANEL[SEC, on = .(IDENPER, year), `:=`(SECCION = i.SECCION, hog_ok = IDENHOG == i.IDENHOG)]
+
+# 2. Contrôles
+PANEL[, .(n = .N, sec_na = mean(is.na(SECCION)), hog_ok = mean(hog_ok, na.rm = TRUE),
+          n_sec = uniqueN(SECCION),
+          coh_cmun = mean(substr(SECCION, 1, 5) == paste0(CPRO, CMUN), na.rm = TRUE)),
+      by = year][order(year)]
+PANEL[, hog_ok := NULL]
+saveRDS(PANEL, file.path(OUT, "panel_persons_2016_2023.rds"))
+```

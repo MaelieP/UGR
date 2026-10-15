@@ -599,8 +599,38 @@ fwrite(rent_tr, file.path(OUT_DIR, "04_rental_income_transitions.csv"))
 
 message("Done. Panel: ", panel_file)
 
-## Save panel ? 
+## Save panel 
 bucket <- s3_bucket("mperier", endpoint_override = Sys.getenv("AWS_S3_ENDPOINT"))
 sink <- bucket$OpenOutputStream("panel_persons_2016_2023.parquet")
 write_parquet(PANEL, sink, compression = "zstd")
 sink$close()
+
+
+## Camparing aggregated results between Panel and INE publications 
+# https://ine.es/dyngs/Prensa/ADRH2023.htm 
+
+ine <- data.table(
+  indicateur = rep(c("rn_personne","rn_menage","uc_moyenne","uc_mediane","rb_personne","rb_menage"), each = 3),
+  year = rep(2021:2023, 6),
+  ine  = c(13268,14061,15036, 33881,35815,38326, 19948,21111,22318,
+           17150,17850,19250, 16159,17207,18457, 41264,43827,47046))
+
+calc <- function(y) {
+  d   <- PANEL[year == y & !is.na(w)]
+  f   <- deflator(y)                      # euros 2023 -> euros courants : valeur / f
+  d[, `:=`(Hb = eq_rb * oecd / f, Hn = eq_rbd * oecd / f, uc = eq_rbd / f)]   # revenus du ménage
+  data.table(year = y, indicateur = c("rn_personne","rn_menage","uc_moyenne","uc_mediane","rb_personne","rb_menage"),
+             panel = c(d[, weighted.mean(Hn / n_members, w)],
+                       d[is_ref == TRUE, weighted.mean(Hn, w)],
+                       d[, weighted.mean(uc, w)],
+                       wq(d$uc, d$w, 0.5),
+                       d[, weighted.mean(Hb / n_members, w)],
+                       d[is_ref == TRUE, weighted.mean(Hb, w)]))
+}
+
+res <- merge(rbindlist(lapply(2021:2023, calc)), ine, by = c("indicateur", "year"))
+res[, ecart_pct := round(100 * (panel / ine - 1), 1)]
+dcast(res, indicateur ~ year, value.var = c("panel", "ine", "ecart_pct"))
+
+# Resultats : en 2021 et 2022, les écarts entre le panel et les données de l'INE ne dépassent pas un 1% si ce n'est pour le 
+# revenu médian par UC. En 2023, on a un peu plus d'écart mais pas affolant 
