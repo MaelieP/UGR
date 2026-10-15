@@ -15,6 +15,7 @@ library(readxl)
 library(shiny)
 library(leaflet)
 library(dplyr)
+library(lubridate)
 library(tidyr)
 library(sf)
 library(stringr)
@@ -216,4 +217,150 @@ t_seccion <- map_dfr(fichiers, function(f) {
 
 
 sf_seccion <- t_seccion %>% left_join((secc %>% select(c("CUSEC", CUDIS, geometry))), by = "CUSEC")
+```
+
+## Adapting idealista data to turismo data
+
+Idealista data comes in seccXtrimestre whilst tourism data is seccXsemestre and districtXsemestre
+
+We transform idealista trismestre dates to semestre as such : march and decembre =\> february and juin and septembre =\> august
+
+```{r}
+
+id <- idealista |>
+  rename(CUSEC = LOCATIONID) %>%
+  mutate(
+    month = month(PERIOD), year = year(PERIOD),
+    # mois du tourisme auquel on rattache chaque trimestre
+    PERIODO = case_when(
+      month == 12 ~ sprintf("%dM02", year + 1),   # déc N -> fév N+1
+      month == 3  ~ sprintf("%dM02", year),       # mars N -> fév N
+      month %in% c(6, 9) ~ sprintf("%dM08", year),       # sept N -> août N
+      TRUE ~ NA_character_
+    )
+  )
+
+
+pmoy <- function(prix, n) {
+  if (all(is.na(prix))) return(NA_real_)
+  if (sum(n, na.rm = TRUE) > 0) weighted.mean(prix, n, na.rm = TRUE)
+  else mean(prix, na.rm = TRUE)
+}
+
+agreger <- function(df) {
+  df |>
+    group_by(CUSEC, PERIODO) |>
+    summarise(
+      prix_sale = pmoy(UNITPRICE_RESIDENTIAL_SALE_ALL, STOCK_RESIDENTIAL_SALE_ALL),   # calculés AVANT les moyennes de n
+      prix_rent = pmoy(UNITPRICE_RESIDENTIAL_RENT_ALL, STOCK_RESIDENTIAL_RENT_ALL),
+      n_sale    = mean(STOCK_RESIDENTIAL_SALE_ALL, na.rm = TRUE),
+      n_rent    = mean(STOCK_RESIDENTIAL_RENT_ALL, na.rm = TRUE),
+      .groups = "drop"
+    )
+}
+
+id_secc_sem <- id |>
+  filter(!is.na(PERIODO)) |>
+  agreger()
+
+# Mai 2025 et mai 2026 (moyenne de mars et juin) <- id_secc_sem |>
+ may <- id %>% filter(month %in% c(3, 6), year %in% c(2025, 2026)) |>
+  mutate(PERIODO = sprintf("%dM05", year)) |>
+  agreger()
+
+ id_secc_sem <- bind_rows(id_secc_sem, may)
+```
+
+```{r seccion_sem}
+
+periodes_exclues <- c("2025M02", "2025M08", "2026M02", "2026M08")
+
+seccion_sem <- full_join(
+  id_secc_sem |> filter(!PERIODO %in% periodes_exclues),
+  t_seccion    |> filter(!PERIODO %in% periodes_exclues),
+  by = c("CUSEC", "PERIODO"),
+  suffix = c("_id", "_tur")
+) %>% filter(!is.na(`vivienda turistica`)) %>% mutate(across(where(is.numeric), ~ replace(.x, is.nan(.x), NA)))
+
+# /!\ certaines sections censales ne sont aps renseignées dans les données de tourisme (alors qu'elles sont dans idealista) -> elles sont environ 1000 
+# on décide de les supprimer car pour ne pas avoir de décalage dans les analyses 
+
+```
+
+```{r distrito_sem}
+# Idealista grouped by district 
+
+id_dis <- idealista |>
+  rename(CUSEC = LOCATIONID) |>
+  mutate(
+    PERIOD = as.Date(PERIOD),
+    CUSEC  = str_pad(as.character(CUSEC), 10, pad = "0"),
+    CUDIS  = substr(CUSEC, 1, 7)          # 2 prov + 3 commune + 2 distrito
+  ) |>
+  group_by(CUDIS, PERIOD) |>
+  summarise(
+    # les prix d'abord : ils utilisent les stocks d'origine comme poids
+    UNITPRICE_RESIDENTIAL_SALE_ALL = pmoy(UNITPRICE_RESIDENTIAL_SALE_ALL, STOCK_RESIDENTIAL_SALE_ALL),
+    UNITPRICE_RESIDENTIAL_RENT_ALL = pmoy(UNITPRICE_RESIDENTIAL_RENT_ALL, STOCK_RESIDENTIAL_RENT_ALL),
+    # puis les stocks, sommés (NA si aucune section n'a de valeur)
+    STOCK_RESIDENTIAL_SALE_ALL = if (all(is.na(STOCK_RESIDENTIAL_SALE_ALL))) NA_real_
+    else sum(STOCK_RESIDENTIAL_SALE_ALL, na.rm = TRUE),
+    STOCK_RESIDENTIAL_RENT_ALL = if (all(is.na(STOCK_RESIDENTIAL_RENT_ALL))) NA_real_
+    else sum(STOCK_RESIDENTIAL_RENT_ALL, na.rm = TRUE),
+    n_sections = n(),
+    .groups = "drop"
+  )
+
+
+
+id2 <- id_dis |>
+  mutate(
+    month = month(PERIOD), year = year(PERIOD),
+    PERIODO = case_when(
+      month == 12 ~ sprintf("%dM02", year + 1),   # déc N -> fév N+1
+      month == 3  ~ sprintf("%dM02", year),       # mars N -> fév N
+      month %in% c(6, 9) ~ sprintf("%dM08", year),# juin/sept N -> août N
+      TRUE ~ NA_character_
+    )
+  )
+
+agreger <- function(df) {
+  df |>
+    group_by(CUDIS, PERIODO) |>
+    summarise(
+      prix_sale = pmoy(UNITPRICE_RESIDENTIAL_SALE_ALL, STOCK_RESIDENTIAL_SALE_ALL),
+      prix_rent = pmoy(UNITPRICE_RESIDENTIAL_RENT_ALL, STOCK_RESIDENTIAL_RENT_ALL),
+      n_sale = if (all(is.na(STOCK_RESIDENTIAL_SALE_ALL))) NA_real_
+      else mean(STOCK_RESIDENTIAL_SALE_ALL, na.rm = TRUE),
+      n_rent = if (all(is.na(STOCK_RESIDENTIAL_RENT_ALL))) NA_real_
+      else mean(STOCK_RESIDENTIAL_RENT_ALL, na.rm = TRUE),
+      .groups = "drop"
+    )
+}
+
+id_dis_sem <- id2 |>
+  filter(!is.na(PERIODO)) |>
+  agreger()
+
+# Mai 2025 et mai 2026 (moyenne de mars et juin)
+may <- id2 |>
+  filter(month %in% c(3, 6), year %in% c(2025, 2026)) |>
+  mutate(PERIODO = sprintf("%dM05", year)) |>
+  agreger()
+
+id_dis_sem <- bind_rows(id_dis_sem, may)
+```
+
+```{r dis_sem}
+
+periodes_exclues <- c("2025M02", "2025M08", "2026M02", "2026M08")
+
+distrito_sem <- full_join(
+  id_dis_sem   |> filter(!PERIODO %in% periodes_exclues),
+  t_distrito  |> filter(!PERIODO %in% periodes_exclues),
+  by = c("CUDIS", "PERIODO"),
+  suffix = c("_id", "_tur")
+) |>
+  filter(!is.na(`vivienda turistica`)) |>
+  mutate(across(where(is.numeric), ~ replace(.x, is.nan(.x), NA)))
 ```
