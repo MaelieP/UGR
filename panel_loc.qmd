@@ -5,6 +5,8 @@ format: html
 editor: visual
 ---
 
+Ce script ajoute la seccion censal au panel
+
 ```{r}
 library(data.table)
 library(stringi)
@@ -63,4 +65,20 @@ PANEL[, .(n = .N, sec_na = mean(is.na(SECCION)), hog_ok = mean(hog_ok, na.rm = T
       by = year][order(year)]
 PANEL[, hog_ok := NULL]
 saveRDS(PANEL, file.path(OUT, "panel_persons_2016_2023.rds"))
+```
+
+```{r enregistrer}
+stopifnot("SECCION" %in% names(PANEL))
+
+tbl <- arrow::arrow_table(PANEL)
+tbl$metadata$r <- NULL
+arrow::write_parquet(tbl, bkt$path("panel_hogares/panel_persons_2016_2023_sec.parquet"),
+                     compression = "zstd")
+rm(tbl)
+```
+
+```{r}
+chk <- arrow::read_parquet(bkt$path("panel_hogares/panel_persons_2016_2023_sec.parquet"),
+                           col_select = c("year", "SECCION"))
+data.table::setDT(chk)[, .N, by = year][order(year)]
 ```

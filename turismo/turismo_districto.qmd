@@ -34,6 +34,15 @@ library(janitor)
 
 endpoint <- sub("^https?://", "", Sys.getenv("AWS_S3_ENDPOINT"))
 
+
+idealista <- s3read_using(
+  FUN    = readr::read_csv,
+  object = "idealista/202606_residential_metrics_idealistadata_v2.csv",
+  bucket = "mperier",
+  opts   = list(region = "", base_url = Sys.getenv("AWS_S3_ENDPOINT")),
+  col_types = readr::cols(.default = "?", LOCATIONID = readr::col_character())
+)
+
 objs <- get_bucket_df(
   bucket   = "mperier",
   prefix   = "turismo/exp_viv_turistica_tabla5_",
