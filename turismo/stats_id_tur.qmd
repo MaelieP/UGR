@@ -3,3 +3,15 @@ title: "stats_id_tur"
 format: html
 ---
 
+```{r}
+tmp <- tempfile(fileext = ".R")
+knitr::purl("/home/onyxia/work/UGR/turismo/turismo_districto.qmd", output = tmp, quiet = TRUE)
+
+env <- new.env()
+source(tmp, local = env)
+
+distrito_sem <- env$distrito_sem
+id_dis_sem   <- env$id_dis_sem
+
+```
+
