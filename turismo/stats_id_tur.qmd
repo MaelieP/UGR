@@ -4,6 +4,13 @@ format: html
 ---
 
 ```{r}
+library(tidyverse)
+library(sf)
+library(scales)
+```
+
+
+```{r}
 tmp <- tempfile(fileext = ".R")
 knitr::purl("/home/onyxia/work/UGR/turismo/turismo_districto.qmd", output = tmp, quiet = TRUE)
 
@@ -11,7 +18,152 @@ env <- new.env()
 source(tmp, local = env)
 
 distrito_sem <- env$distrito_sem
+seccion_sem <- env$seccion_sem
 id_dis_sem   <- env$id_dis_sem
+id_secc_sem <- env$id_secc_sem
+t_distrito <- env$t_distrito
+
+
+aparttur <- s3read_using(
+  FUN       = readr::read_delim,
+  delim     = ";",
+  col_types = readr::cols(.default = "c"),
+  locale    = readr::locale(encoding = "latin1"),
+  object    = "turismo/tur_source_encuesta/2021.csv",
+  bucket    = "mperier",
+  opts      = list(region = "", base_url = Sys.getenv("AWS_S3_ENDPOINT"))
+) %>% select(c("Apartamentos y personal empleado", "Periodo", "Total")) %>% mutate(
+    value = readr::parse_number(Total,
+              locale = readr::locale(decimal_mark = ",", grouping_mark = ".")),
+    date  = make_date(as.integer(substr(Periodo, 1, 4)),
+                      as.integer(substr(Periodo, 6, 7)), 1)
+  )
+
 
 ```
 
+```{r}
+d <- distrito_sem |>
+  mutate(
+    year  = as.integer(substr(PERIODO, 1, 4)),
+    month   = as.integer(substr(PERIODO, 6, 7)),
+    date   = make_date(year, month, 1),
+    season = case_when(month == 2 ~ "feb",
+                       month == 8 ~ "aug",
+                       month == 5 ~ "may", 
+                       month == 11 ~ "nov"),
+    PERIODO = fct_reorder(PERIODO, date)
+  ) |>
+  mutate(
+    vt       = as.numeric(`vivienda turistica`),
+    pct_vt   = as.numeric(`Porcentaje vivienda turistica`),
+    plz      = as.numeric(plazas),
+    plz_p_vt = as.numeric(`plazas por vivienda turistica`)
+  )
+```
+
+```{r}
+vt_nat <- d |>
+  group_by(PERIODO, date, year) |>
+  summarise(vt = sum(vt, na.rm = TRUE),
+            plazas = sum(plz, na.rm = TRUE),
+            n_distritos = n(), .groups = "drop")
+
+
+vt_nat <- vt_nat |>
+  mutate(lab = paste0(month.abb[month(date)], "\n", year(date)))
+
+seg <- vt_nat |>
+  arrange(date) |>
+  mutate(xend = lead(date), yend = lead(vt),
+         gap  = date == as.Date("2025-05-01")) |>   # segment May 2025 -> Nov 2025
+  filter(!is.na(xend))
+
+ggplot(vt_nat, aes(date, vt)) +
+  geom_vline(xintercept = as.Date("2025-08-01"),
+             linetype = "dotted", colour = "grey60") +
+  annotate("text", x = as.Date("2025-08-01"), y = 415000,
+           label = "Aug 2025\nno data", size = 3, colour = "grey40",
+           fontface = "italic", lineheight = .9) +
+  geom_segment(data = seg,
+               aes(x = date, y = vt, xend = xend, yend = yend, linetype = gap),
+               linewidth = .9, colour = "#2C7FB8") +
+  geom_point(size = 2.2, colour = "#2C7FB8") +
+  scale_linetype_manual(values = c(`FALSE` = "solid", `TRUE` = "22"),
+                        guide = "none") +
+  scale_x_date(breaks = vt_nat$date,
+               labels = vt_nat$lab,
+               expand = expansion(mult = .03)) +
+  scale_y_continuous(labels = label_number(big.mark = ","),
+                     breaks = seq(200000, 450000, by = 50000)) +
+  coord_cartesian(ylim = c(200000, 420000)) +
+  labs(title = "Tourist dwellings in Spain",
+       subtitle = "Total over districts",
+       x = NULL, y = NULL,
+       caption = "Dashed line: no observation in Aug 2025 (summer peak missing).\nSource: INE, viviendas turísticas") +
+  theme_minimal(base_size = 12) +
+  theme(panel.grid.minor = element_blank(),
+        axis.text.x = element_text(size = 8, lineheight = .9),
+        plot.title.position = "plot")
+```
+```{r}
+lab_vt  <- "Tourist dwellings (INE, platforms)"
+lab_apt <- "Tourist apartments (INE, occupancy survey)"
+
+ggplot(vt_nat, aes(date, vt)) +
+  geom_vline(xintercept = as.Date("2025-08-01"),
+             linetype = "dotted", colour = "grey60") +
+  annotate("text", x = as.Date("2025-08-01"), y = 440000,
+           label = "Aug 2025\nno dwellings data", size = 3, colour = "grey40",
+           fontface = "italic", lineheight = .9) +
+  # tourist apartments (monthly)
+  geom_line(data = aparttur, aes(date, value, colour = lab_apt), linewidth = .6) +
+  geom_point(data = aparttur, aes(date, value, colour = lab_apt), size = 1) +
+  # tourist dwellings
+  geom_segment(data = seg,
+               aes(x = date, y = vt, xend = xend, yend = yend,
+                   linetype = gap, colour = lab_vt),
+               linewidth = .9) +
+  geom_point(aes(colour = lab_vt), size = 2.2) +
+  scale_colour_manual(values = setNames(c("#2C7FB8", "#E6550D"), c(lab_vt, lab_apt)),
+                      breaks = c(lab_vt, lab_apt), name = NULL) +
+  scale_linetype_manual(values = c(`FALSE` = "solid", `TRUE` = "22"),
+                        guide = "none") +
+  scale_x_date(breaks = vt_nat$date,
+               labels = vt_nat$lab,
+               expand = expansion(mult = .03)) +
+  scale_y_continuous(labels = label_number(big.mark = ","),
+                     breaks = seq(0, 450000, by = 100000)) +
+  coord_cartesian(ylim = c(0, 450000)) +
+  labs(title = "Tourist accommodation in Spain",
+       x = NULL, y = NULL,
+       caption = "Dashed line: no tourist dwellings observation in Aug 2025.\nSource: INE, viviendas turísticas; INE, Encuesta de ocupación en apartamentos turísticos") +
+  theme_minimal(base_size = 12) +
+  theme(panel.grid.minor = element_blank(),
+        axis.text.x = element_text(size = 8, lineheight = .9),
+        legend.position = "top",
+        legend.justification = "left",
+        plot.title.position = "plot")
+
+```
+```{r}
+ggplot(vt_nat, aes(date, plazas)) +
+  geom_line(linewidth = .9, colour = "#2C7FB8") +
+  geom_point(size = 2.2, colour = "#2C7FB8") +
+  scale_x_date(breaks = vt_nat$date,
+               labels = vt_nat$lab,
+               expand = expansion(mult = .03)) +
+  scale_y_continuous(labels = label_number(big.mark = ",")) +
+  labs(title = "Plazas de turismo",
+       subtitle = "",
+       x = NULL, y = NULL,
+       caption = "Source: INE, viviendas turísticas") +
+  theme_minimal(base_size = 12) +
+  theme(panel.grid.minor = element_blank(),
+        axis.text.x = element_text(size = 8, lineheight = .9),
+        plot.title.position = "plot")
+
+```
+
+
+Finalement ce n'est pas si grave la ≠ entre les sources de données car elles ne mesurent pas la même chose, même si c'est un peu curieux que les dynamiques soient différentes, peut-être peut-on y voir une augmentation de l'utilisation des plateformes et de la transition de logements en logements touristiques ce qui est précisément ce qu'on cherche à étudier. En ce sens la différence entre cette base et celle des hôtels / logements touristiques plus classiques peut servir d'indicateur du débordement de l'activité touristique sur le logement ? piste intéressante mais les données des logements "officiels" ne sont qu'au niveau provincial... 

@@ -232,22 +232,37 @@ sf_seccion <- t_seccion %>% left_join((secc %>% select(c("CUSEC", CUDIS, geometr
 
 Idealista data comes in seccXtrimestre whilst tourism data is seccXsemestre and districtXsemestre
 
-We transform idealista trismestre dates to semestre as such : march and decembre =\> february and juin and septembre =\> august
+We transform idealista trismestre dates to semestre as such :
+
+- march and decembre =\> february
+
+- juin and septembre =\> august.
+
+- septembre and decembre =\> november (2024 and 2025)
+
+- march and june =\> may (2025 and 2026)
 
 ```{r}
+map_periodes <- tibble::tribble(
+  ~month, ~offset, ~suffixe,
+  12,     1,       "M02",   # déc N   -> fév N+1
+  3,      0,       "M02",   # mars N  -> fév N
+  6,      0,       "M08",   # juin N  -> août N
+  9,      0,       "M08",   # sept N  -> août N
+  3,      0,       "M05",   # mars N  -> mai N
+  6,      0,       "M05",   # juin N  -> mai N
+  9,      0,       "M11",   # sept N  -> nov N
+  12,     0,       "M11"    # déc N   -> nov N
+)
 
-id <- idealista |>
-  rename(CUSEC = LOCATIONID) %>%
-  mutate(
-    month = month(PERIOD), year = year(PERIOD),
-    # mois du tourisme auquel on rattache chaque trimestre
-    PERIODO = case_when(
-      month == 12 ~ sprintf("%dM02", year + 1),   # déc N -> fév N+1
-      month == 3  ~ sprintf("%dM02", year),       # mars N -> fév N
-      month %in% c(6, 9) ~ sprintf("%dM08", year),       # sept N -> août N
-      TRUE ~ NA_character_
-    )
-  )
+id_base <- idealista |>
+  rename(CUSEC = LOCATIONID) |>
+  mutate(PERIOD = as.Date(PERIOD),
+         month = month(PERIOD), year = year(PERIOD))
+
+id <- id_base |>
+  inner_join(map_periodes, by = "month", relationship = "many-to-many") |>
+  mutate(PERIODO = sprintf("%d%s", year + offset, suffixe))
 
 
 pmoy <- function(prix, n) {
@@ -256,37 +271,39 @@ pmoy <- function(prix, n) {
   else mean(prix, na.rm = TRUE)
 }
 
-agreger <- function(df) {
+agreger_secc <- function(df) {
   df |>
     group_by(CUSEC, PERIODO) |>
     summarise(
-      prix_sale = pmoy(UNITPRICE_RESIDENTIAL_SALE_ALL, STOCK_RESIDENTIAL_SALE_ALL),   # calculés AVANT les moyennes de n
+      prix_sale = pmoy(UNITPRICE_RESIDENTIAL_SALE_ALL, STOCK_RESIDENTIAL_SALE_ALL),  # AVANT les moyennes de n
       prix_rent = pmoy(UNITPRICE_RESIDENTIAL_RENT_ALL, STOCK_RESIDENTIAL_RENT_ALL),
-      n_sale    = mean(STOCK_RESIDENTIAL_SALE_ALL, na.rm = TRUE),
-      n_rent    = mean(STOCK_RESIDENTIAL_RENT_ALL, na.rm = TRUE),
+      n_sale = if (all(is.na(STOCK_RESIDENTIAL_SALE_ALL))) NA_real_
+      else mean(STOCK_RESIDENTIAL_SALE_ALL, na.rm = TRUE),
+      n_rent = if (all(is.na(STOCK_RESIDENTIAL_RENT_ALL))) NA_real_
+      else mean(STOCK_RESIDENTIAL_RENT_ALL, na.rm = TRUE),
+      n_trim = n_distinct(PERIOD),
       .groups = "drop"
     )
 }
 
+# 3. Périodes réellement présentes dans le tourisme
+periodes_tourisme <- c(
+  paste0(rep(2020:2024, each = 2), c("M02", "M08")),  # fév/août 2020-2024 (les absentes seront ignorées)
+  "2024M11", "2025M11", "2025M05", "2026M05"
+)
+
 id_secc_sem <- id |>
-  filter(!is.na(PERIODO)) |>
-  agreger()
+  agreger_secc() |>
+  filter(PERIODO %in% periodes_tourisme)
 
-# Mai 2025 et mai 2026 (moyenne de mars et juin) <- id_secc_sem |>
- may <- id %>% filter(month %in% c(3, 6), year %in% c(2025, 2026)) |>
-  mutate(PERIODO = sprintf("%dM05", year)) |>
-  agreger()
-
- id_secc_sem <- bind_rows(id_secc_sem, may)
 ```
 
 ```{r seccion_sem}
 
-periodes_exclues <- c("2025M02", "2025M08", "2026M02", "2026M08")
 
 seccion_sem <- full_join(
-  id_secc_sem |> filter(!PERIODO %in% periodes_exclues),
-  t_seccion    |> filter(!PERIODO %in% periodes_exclues),
+  id_secc_sem ,
+  t_seccion   ,
   by = c("CUSEC", "PERIODO"),
   suffix = c("_id", "_tur")
 ) %>% filter(!is.na(`vivienda turistica`)) %>% mutate(across(where(is.numeric), ~ replace(.x, is.nan(.x), NA)))
@@ -297,6 +314,13 @@ seccion_sem <- full_join(
 ```
 
 ```{r distrito_sem}
+
+pmoy <- function(prix, n) {
+  if (all(is.na(prix))) return(NA_real_)
+  if (sum(n, na.rm = TRUE) > 0) weighted.mean(prix, n, na.rm = TRUE)
+  else mean(prix, na.rm = TRUE)
+}
+
 # Idealista grouped by district 
 
 id_dis <- idealista |>
@@ -318,22 +342,29 @@ id_dis <- idealista |>
     else sum(STOCK_RESIDENTIAL_RENT_ALL, na.rm = TRUE),
     n_sections = n(),
     .groups = "drop"
-  )
+  )|>
+  mutate(month = month(PERIOD), year = year(PERIOD))
 
+map_periodes <- tibble::tribble(
+  ~month, ~offset, ~suffixe,
+  12,     1,       "M02",   # déc N   -> fév N+1
+  3,      0,       "M02",   # mars N  -> fév N
+  6,      0,       "M08",   # juin N  -> août N
+  9,      0,       "M08",   # sept N  -> août N
+  3,      0,       "M05",   # mars N  -> mai N
+  6,      0,       "M05",   # juin N  -> mai N
+  9,      0,       "M11",   # sept N  -> nov N
+  12,     0,       "M11"    # déc N   -> nov N
+)
 
+periodes_tourisme <- c(
+  paste0(2021:2024, "M02"),
+  paste0(2020:2024, "M08"),
+  "2024M11", "2025M05", "2025M11", "2026M05"
+)
 
-id2 <- id_dis |>
-  mutate(
-    month = month(PERIOD), year = year(PERIOD),
-    PERIODO = case_when(
-      month == 12 ~ sprintf("%dM02", year + 1),   # déc N -> fév N+1
-      month == 3  ~ sprintf("%dM02", year),       # mars N -> fév N
-      month %in% c(6, 9) ~ sprintf("%dM08", year),# juin/sept N -> août N
-      TRUE ~ NA_character_
-    )
-  )
-
-agreger <- function(df) {
+# 3. Agrégation sur la fenêtre
+agreger_dis <- function(df) {
   df |>
     group_by(CUDIS, PERIODO) |>
     summarise(
@@ -343,33 +374,28 @@ agreger <- function(df) {
       else mean(STOCK_RESIDENTIAL_SALE_ALL, na.rm = TRUE),
       n_rent = if (all(is.na(STOCK_RESIDENTIAL_RENT_ALL))) NA_real_
       else mean(STOCK_RESIDENTIAL_RENT_ALL, na.rm = TRUE),
+      n_trim = n_distinct(PERIOD),
       .groups = "drop"
     )
 }
 
-id_dis_sem <- id2 |>
-  filter(!is.na(PERIODO)) |>
-  agreger()
-
-# Mai 2025 et mai 2026 (moyenne de mars et juin)
-may <- id2 |>
-  filter(month %in% c(3, 6), year %in% c(2025, 2026)) |>
-  mutate(PERIODO = sprintf("%dM05", year)) |>
-  agreger()
-
-id_dis_sem <- bind_rows(id_dis_sem, may)
+id_dis_sem <- id_dis |>
+  inner_join(map_periodes, by = "month", relationship = "many-to-many") |>
+  mutate(PERIODO = sprintf("%d%s", year + offset, suffixe)) |>
+  filter(PERIODO %in% periodes_tourisme) |>
+  agreger_dis()
 ```
 
 ```{r dis_sem}
 
-periodes_exclues <- c("2025M02", "2025M08", "2026M02", "2026M08")
-
 distrito_sem <- full_join(
-  id_dis_sem   |> filter(!PERIODO %in% periodes_exclues),
-  t_distrito  |> filter(!PERIODO %in% periodes_exclues),
+  id_dis_sem   ,
+  t_distrito  ,
   by = c("CUDIS", "PERIODO"),
   suffix = c("_id", "_tur")
 ) |>
   filter(!is.na(`vivienda turistica`)) |>
   mutate(across(where(is.numeric), ~ replace(.x, is.nan(.x), NA)))
 ```
+
+Les données de Idealista commencent en 2022 et peuvent être rattachées aux données de tourisme puor août 2022 donc pour la période 2020-août 2022 les colonnes nmb et prix de vente et loyer sont éviemment NA.
