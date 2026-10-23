@@ -34,6 +34,26 @@ library(janitor)
 
 endpoint <- sub("^https?://", "", Sys.getenv("AWS_S3_ENDPOINT"))
 
+ipc_raw <- s3read_using(
+  FUN       = readr::read_delim,
+  delim     = ";",
+  col_types = readr::cols(.default = "c"),
+  locale    = readr::locale(encoding = "windows-1252"),
+  object    = "inflation.csv",   
+  bucket    = "mperier",
+  opts      = list(region = "", base_url = Sys.getenv("AWS_S3_ENDPOINT"))
+)
+
+ipc_q <- ipc_raw |>
+  filter(`Tipo de dato` == "Índice") |>
+  transmute(annee = as.integer(substr(Periodo, 1, 4)),
+            mois  = as.integer(substr(Periodo, 6, 7)),
+            ipc   = readr::parse_number(Total,
+                                        locale = readr::locale(decimal_mark = ",", grouping_mark = ".")))
+
+# Référence : euros de la fenêtre 2026M05 (moyenne mars + juin 2026)
+ipc_ref <- ipc_q |> filter(annee == 2026, mois %in% c(3, 6)) |> pull(ipc) |> mean()
+
 
 idealista <- s3read_using(
   FUN    = readr::read_csv,
@@ -42,6 +62,14 @@ idealista <- s3read_using(
   opts   = list(region = "", base_url = Sys.getenv("AWS_S3_ENDPOINT")),
   col_types = readr::cols(.default = "?", LOCATIONID = readr::col_character())
 )
+
+idealista <- idealista |>
+  mutate(PERIOD = as.Date(PERIOD),
+         annee_ipc = year(PERIOD), mois_ipc = month(PERIOD)) |>
+  left_join(ipc_q, by = c("annee_ipc" = "annee", "mois_ipc" = "mois")) |>
+  mutate(UNITPRICE_RESIDENTIAL_SALE_REAL = UNITPRICE_RESIDENTIAL_SALE_ALL * ipc_ref / ipc,
+         UNITPRICE_RESIDENTIAL_RENT_REAL = UNITPRICE_RESIDENTIAL_RENT_ALL * ipc_ref / ipc) |>
+  select(-annee_ipc, -mois_ipc)
 
 objs <- get_bucket_df(
   bucket   = "mperier",
@@ -277,6 +305,9 @@ agreger_secc <- function(df) {
     summarise(
       prix_sale = pmoy(UNITPRICE_RESIDENTIAL_SALE_ALL, STOCK_RESIDENTIAL_SALE_ALL),  # AVANT les moyennes de n
       prix_rent = pmoy(UNITPRICE_RESIDENTIAL_RENT_ALL, STOCK_RESIDENTIAL_RENT_ALL),
+      prix_sale_reel = pmoy(UNITPRICE_RESIDENTIAL_SALE_REAL, STOCK_RESIDENTIAL_SALE_ALL),
+      prix_rent_reel = pmoy(UNITPRICE_RESIDENTIAL_RENT_REAL, STOCK_RESIDENTIAL_RENT_ALL),
+      
       n_sale = if (all(is.na(STOCK_RESIDENTIAL_SALE_ALL))) NA_real_
       else mean(STOCK_RESIDENTIAL_SALE_ALL, na.rm = TRUE),
       n_rent = if (all(is.na(STOCK_RESIDENTIAL_RENT_ALL))) NA_real_
@@ -333,8 +364,10 @@ id_dis <- idealista |>
   group_by(CUDIS, PERIOD) |>
   summarise(
     # les prix d'abord : ils utilisent les stocks d'origine comme poids
-    UNITPRICE_RESIDENTIAL_SALE_ALL = pmoy(UNITPRICE_RESIDENTIAL_SALE_ALL, STOCK_RESIDENTIAL_SALE_ALL),
-    UNITPRICE_RESIDENTIAL_RENT_ALL = pmoy(UNITPRICE_RESIDENTIAL_RENT_ALL, STOCK_RESIDENTIAL_RENT_ALL),
+    UNITPRICE_RESIDENTIAL_SALE_ALL  = pmoy(UNITPRICE_RESIDENTIAL_SALE_ALL,  STOCK_RESIDENTIAL_SALE_ALL),
+    UNITPRICE_RESIDENTIAL_RENT_ALL  = pmoy(UNITPRICE_RESIDENTIAL_RENT_ALL,  STOCK_RESIDENTIAL_RENT_ALL),
+    UNITPRICE_RESIDENTIAL_SALE_REAL = pmoy(UNITPRICE_RESIDENTIAL_SALE_REAL, STOCK_RESIDENTIAL_SALE_ALL),
+    UNITPRICE_RESIDENTIAL_RENT_REAL = pmoy(UNITPRICE_RESIDENTIAL_RENT_REAL, STOCK_RESIDENTIAL_RENT_ALL),
     # puis les stocks, sommés (NA si aucune section n'a de valeur)
     STOCK_RESIDENTIAL_SALE_ALL = if (all(is.na(STOCK_RESIDENTIAL_SALE_ALL))) NA_real_
     else sum(STOCK_RESIDENTIAL_SALE_ALL, na.rm = TRUE),
@@ -368,8 +401,10 @@ agreger_dis <- function(df) {
   df |>
     group_by(CUDIS, PERIODO) |>
     summarise(
-      prix_sale = pmoy(UNITPRICE_RESIDENTIAL_SALE_ALL, STOCK_RESIDENTIAL_SALE_ALL),
-      prix_rent = pmoy(UNITPRICE_RESIDENTIAL_RENT_ALL, STOCK_RESIDENTIAL_RENT_ALL),
+      prix_sale      = pmoy(UNITPRICE_RESIDENTIAL_SALE_ALL,  STOCK_RESIDENTIAL_SALE_ALL),
+      prix_rent      = pmoy(UNITPRICE_RESIDENTIAL_RENT_ALL,  STOCK_RESIDENTIAL_RENT_ALL),
+      prix_sale_reel = pmoy(UNITPRICE_RESIDENTIAL_SALE_REAL, STOCK_RESIDENTIAL_SALE_ALL),
+      prix_rent_reel = pmoy(UNITPRICE_RESIDENTIAL_RENT_REAL, STOCK_RESIDENTIAL_RENT_ALL),
       n_sale = if (all(is.na(STOCK_RESIDENTIAL_SALE_ALL))) NA_real_
       else mean(STOCK_RESIDENTIAL_SALE_ALL, na.rm = TRUE),
       n_rent = if (all(is.na(STOCK_RESIDENTIAL_RENT_ALL))) NA_real_
@@ -399,3 +434,5 @@ distrito_sem <- full_join(
 ```
 
 Les données de Idealista commencent en 2022 et peuvent être rattachées aux données de tourisme puor août 2022 donc pour la période 2020-août 2022 les colonnes nmb et prix de vente et loyer sont éviemment NA.
+
+**En termes "réels" on parle en euros de 2026 !**

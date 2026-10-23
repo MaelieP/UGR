@@ -7,6 +7,7 @@ format: html
 library(tidyverse)
 library(sf)
 library(scales)
+library(mapSpain)
 ```
 
 
@@ -22,6 +23,7 @@ seccion_sem <- env$seccion_sem
 id_dis_sem   <- env$id_dis_sem
 id_secc_sem <- env$id_secc_sem
 t_distrito <- env$t_distrito
+id_dis <- env$id_dis
 
 
 aparttur <- s3read_using(
@@ -39,6 +41,25 @@ aparttur <- s3read_using(
                       as.integer(substr(Periodo, 6, 7)), 1)
   )
 
+
+infl <- s3read_using(
+  FUN       = readr::read_delim,
+  delim     = ";",
+  col_types = readr::cols(.default = "c"),         # tout en texte, on convertit après
+  locale    = readr::locale(encoding = "latin1"),  # fichiers INE ; "UTF-8" sinon
+  object    = "inflation.csv",   # <- à remplacer par la Key exacte
+  bucket    = "mperier",
+  opts      = list(region = "", base_url = Sys.getenv("AWS_S3_ENDPOINT"))
+) %>% select(Periodo, Total)
+
+inflation <- infl |>
+  transmute(annee = as.integer(substr(Periodo, 1, 4)),
+            mois  = as.integer(substr(Periodo, 6, 7)),
+            ipc   = readr::parse_number(Total,
+                      locale = readr::locale(decimal_mark = ",", grouping_mark = ".")))
+
+# Référence : euros de la fenêtre 2026M05 (moyenne mars + juin 2026), comme avant
+ipc_ref <- inflation |> filter(annee == 2026, mois %in% c(3, 6)) |> pull(ipc) |> mean()
 
 ```
 
@@ -137,7 +158,7 @@ ggplot(vt_nat, aes(date, vt)) +
   coord_cartesian(ylim = c(0, 450000)) +
   labs(title = "Tourist accommodation in Spain",
        x = NULL, y = NULL,
-       caption = "Dashed line: no tourist dwellings observation in Aug 2025.\nSource: INE, viviendas turísticas; INE, Encuesta de ocupación en apartamentos turísticos") +
+       caption = "Dashed line: no tourist dwellings observation in Aug 2025.\nSource: INE, viviendas turística via scrapping; INE, Encuesta de ocupación en apartamentos turísticos") +
   theme_minimal(base_size = 12) +
   theme(panel.grid.minor = element_blank(),
         axis.text.x = element_text(size = 8, lineheight = .9),
@@ -167,3 +188,336 @@ ggplot(vt_nat, aes(date, plazas)) +
 
 
 Finalement ce n'est pas si grave la ≠ entre les sources de données car elles ne mesurent pas la même chose, même si c'est un peu curieux que les dynamiques soient différentes, peut-être peut-on y voir une augmentation de l'utilisation des plateformes et de la transition de logements en logements touristiques ce qui est précisément ce qu'on cherche à étudier. En ce sens la différence entre cette base et celle des hôtels / logements touristiques plus classiques peut servir d'indicateur du débordement de l'activité touristique sur le logement ? piste intéressante mais les données des logements "officiels" ne sont qu'au niveau provincial... 
+
+# I. TOURISME 
+## I.a) Évolution du logement touristique
+
+
+```{r}
+vt_prov <- d |>
+  group_by(PROV, PROV_LITERAL, PERIODO, date, season) |>
+  summarise(vt = sum(vt, na.rm = TRUE), .groups = "drop")
+
+# Évolution août 2020 -> août 2024 (à saison égale)
+vt_prov |>
+  filter(PERIODO %in% c("2020M08", "2024M08")) |>
+  select(PROV, PROV_LITERAL, PERIODO, vt) |>
+  pivot_wider(names_from = PERIODO, values_from = vt) |>
+  mutate(evol_pct = 100 * (`2024M08` / `2020M08` - 1)) |>
+  arrange(desc(evol_pct))
+```
+
+```{r}
+provs <- c("08" = "Barcelona", "28" = "Madrid", "07" = "Illes Balears",
+           "18" = "Granada",   "23" = "Jaén", "46" = "Valencia")
+
+vt_prov_sel <- d |>
+  mutate(PROV = str_pad(PROV, 2, pad = "0")) |>
+  filter(PROV %in% names(provs)) |>
+  group_by(PROV, PERIODO, date) |>
+  summarise(vt = sum(vt, na.rm = TRUE), .groups = "drop") |>
+  mutate(prov_lab = factor(provs[PROV], levels = provs)) |>
+  group_by(PROV) |>
+  arrange(date, .by_group = TRUE) |>
+  mutate(index = 100 * vt / first(vt)) |>
+  ungroup()
+
+# Contrôle : la base doit être 2020M08 pour les 5 provinces
+vt_prov_sel |> group_by(prov_lab) |> slice_min(date) |> select(prov_lab, PERIODO, vt)
+
+# Segments, avec le pointillé sur la rupture de calendrier (Aug 2024 -> Nov 2024)
+seg_prov <- vt_prov_sel |>
+  group_by(PROV) |>
+  arrange(date, .by_group = TRUE) |>
+  mutate(xend = lead(date), yend = lead(index),
+         gap  = date == as.Date("2024-08-01")) |>
+  ungroup() |>
+  filter(!is.na(xend))
+
+dates_obs <- sort(unique(vt_prov_sel$date))
+labs_obs  <- paste0(month.abb[month(dates_obs)], "\n", year(dates_obs))
+
+ggplot(vt_prov_sel, aes(date, index, colour = prov_lab)) +
+  geom_hline(yintercept = 100, colour = "grey60") +
+  geom_vline(xintercept = as.Date("2024-09-30"),
+             linetype = "dotted", colour = "grey60") +
+  geom_segment(data = seg_prov,
+               aes(x = date, y = index, xend = xend, yend = yend, linetype = gap),
+               linewidth = .9) +
+  geom_point(size = 1.8) +
+  geom_text(data = \(x) slice_max(x, date, by = prov_lab),
+            aes(label = prov_lab), hjust = -0.1, size = 3.3, show.legend = FALSE) +
+  scale_linetype_manual(values = c(`FALSE` = "solid", `TRUE` = "22"), guide = "none") +
+  scale_colour_manual(values = c("Barcelona" = "#2C7FB8", "Madrid" = "#D7301F",
+                                 "Illes Balears" = "#41AB5D", "Granada" = "#8856A7",
+                                 "Jaén" = "#E6A700")) +
+  scale_x_date(breaks = dates_obs, labels = labs_obs,
+               expand = expansion(mult = c(.03, .15))) +
+  labs(title = "Tourist dwellings by province",
+       subtitle = "Index, Aug 2020 = 100",
+       x = NULL, y = NULL,
+       caption = "Dashed line: change in reference months (Feb/Aug until 2024, May/Nov from Nov 2024).\nSource: INE, viviendas turísticas") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none",
+        panel.grid.minor = element_blank(),
+        axis.text.x = element_text(size = 8, lineheight = .9),
+        plot.title.position = "plot")
+
+ggplot(vt_prov_sel, aes(date, vt)) +
+  geom_line(colour = "#2C7FB8") + geom_point(colour = "#2C7FB8", size = 1.5) +
+  facet_wrap(~ prov_lab, scales = "free_y") +
+  scale_y_continuous(labels = label_number(big.mark = ",")) +
+  labs(x = NULL, y = NULL, title = "Tourist dwellings by province") +
+  theme_minimal(base_size = 11)
+```
+- Lois en 2024 à Madrid ? oui https://lepetitjournal.com/madrid/logement/madrid-durcissement-reglementation-logement-touristique-383997 mais je ne sais pas à quel point ça a participé à la diminution 
+
+Quartiers avec le plus haut % 
+```{r}
+d |>
+  filter(PERIODO == "2024M08") |>
+  slice_max(pct_vt, n = 20) |>
+  select(CUDIS, MUN_LITERAL, PROV_LITERAL, vt, pct_vt)
+```
+
+## Precios de vivienda 
+
+```{r}
+
+pmoy <- function(prix, n) {
+  if (all(is.na(prix))) return(NA_real_)
+  if (sum(n, na.rm = TRUE) > 0) weighted.mean(prix, n, na.rm = TRUE)
+  else mean(prix, na.rm = TRUE)
+}
+
+
+log_nat <- d |>
+  filter(!is.na(prix_sale) | !is.na(prix_rent)) |>
+  group_by(PERIODO, date, season) |>
+  summarise(
+    prix_sale = pmoy(prix_sale, n_sale),   # pondéré par le stock de vente
+    prix_rent = pmoy(prix_rent, n_rent),   # pondéré par le stock de location
+    n_sale    = sum(n_sale, na.rm = TRUE),
+    n_rent    = sum(n_rent, na.rm = TRUE),
+    n_distritos_couverts = n(),
+    .groups = "drop"
+  )
+log_nat
+```
+
+```{r}
+prix_nat <- id_dis |>
+  group_by(PERIOD) |>
+  summarise(
+    venta    = pmoy(UNITPRICE_RESIDENTIAL_SALE_REAL, STOCK_RESIDENTIAL_SALE_ALL),
+    alquiler = pmoy(UNITPRICE_RESIDENTIAL_RENT_REAL, STOCK_RESIDENTIAL_RENT_ALL),
+    .groups  = "drop"
+  ) |>
+  filter(!is.na(venta) | !is.na(alquiler))
+
+# --- Facteur d'échelle pour l'axe secondaire --------------------------------
+# Proportionnel (sans décalage) : une même hausse en % donne la même pente relative
+k <- mean(prix_nat$venta, na.rm = TRUE) / mean(prix_nat$alquiler, na.rm = TRUE)
+
+meses_es <- c("Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic")
+dates_px <- sort(unique(prix_nat$PERIOD))
+labs_px  <- paste0(meses_es[month(dates_px)], "\n", year(dates_px))
+
+col_venta <- "#2C7FB8"; col_alq <- "#E6550D"
+lab_venta <- "Venta (€/m², eje izquierdo)"
+lab_alq   <- "Alquiler (€/m²/mes, eje derecho)"
+
+ggplot(prix_nat, aes(PERIOD)) +
+  geom_line(aes(y = venta, colour = lab_venta), linewidth = .9) +
+  geom_point(aes(y = venta, colour = lab_venta), size = 2) +
+  geom_line(aes(y = alquiler * k, colour = lab_alq), linewidth = .9) +
+  geom_point(aes(y = alquiler * k, colour = lab_alq), size = 2) +
+  scale_colour_manual(values = setNames(c(col_venta, col_alq), c(lab_venta, lab_alq)),
+                      name = NULL) +
+  scale_y_continuous(
+    name     = "Precio de venta (€/m²)",
+    labels   = label_number(big.mark = ".", decimal.mark = ","),
+    sec.axis = sec_axis(~ . / k, name = "Precio de alquiler (€/m²/mes)",
+                        labels = label_number(accuracy = .1, big.mark = ".",
+                                              decimal.mark = ","))
+  ) +
+  scale_x_date(breaks = dates_px, labels = labs_px) +
+  labs(title    = "Evolución de los precios de la vivienda en España",
+       subtitle = "Media en euros constantes de mayo de 2026",
+       x = NULL,
+       caption  = "Precios deflactados con el IPC general (INE).\nFuente: idealista; INE") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position      = "top",
+        legend.justification = "left",
+        panel.grid.minor     = element_blank(),
+        axis.title.y.left    = element_text(colour = col_venta),
+        axis.text.y.left     = element_text(colour = col_venta),
+        axis.title.y.right   = element_text(colour = col_alq),
+        axis.text.y.right    = element_text(colour = col_alq),
+        axis.text.x          = element_text(size = 8, lineheight = .9),
+        plot.title.position  = "plot")
+```
+
+
+
+
+```{r}
+resumen_nat <- d |>
+  group_by(PERIODO) |>
+  summarise(
+    alquiler = pmoy(prix_rent_reel, n_rent),     # pondéré par le stock de location
+    venta    = pmoy(prix_sale_reel, n_sale),     # pondéré par le stock de vente
+    viviendas_turisticas = sum(vt, na.rm = TRUE),
+    vt_distritos_con_precio = sum(vt[!is.na(prix_sale_reel) |
+                                                       !is.na(prix_rent_reel)], na.rm = TRUE),
+    n_distritos        = n(),
+    n_distritos_precio = sum(!is.na(prix_sale_reel) | !is.na(prix_rent_reel)),
+    .groups = "drop"
+  ) |>
+  arrange(PERIODO)
+
+resumen_nat
+```
+```{r}
+
+# --- Correspondance province -> CCAA (codes INE) ---------------------------
+ccaa_prov <- list(
+  "Andalucía"          = c("04","11","14","18","21","23","29","41"),
+  "Aragón"             = c("22","44","50"),
+  "Asturias"           = "33",
+  "Illes Balears"      = "07",
+  "Canarias"           = c("35","38"),
+  "Cantabria"          = "39",
+  "Castilla y León"    = c("05","09","24","34","37","40","42","47","49"),
+  "Castilla-La Mancha" = c("02","13","16","19","45"),
+  "Cataluña"           = c("08","17","25","43"),
+  "C. Valenciana"      = c("03","12","46"),
+  "Extremadura"        = c("06","10"),
+  "Galicia"            = c("15","27","32","36"),
+  "Madrid"             = "28",
+  "Murcia"             = "30",
+  "Navarra"            = "31",
+  "País Vasco"         = c("01","20","48"),
+  "La Rioja"           = "26",
+  "Ceuta"              = "51",
+  "Melilla"            = "52"
+) |>
+  enframe(name = "CCAA", value = "PROV") |>
+  unnest(PROV)
+
+# --- Agrégation CCAA x période ----------------------------------------------
+ccaa_sem <- d |>
+  mutate(PROV = str_pad(as.character(PROV), 2, pad = "0"),
+         PERIODO = as.character(PERIODO)) |>
+  left_join(ccaa_prov, by = "PROV") |>
+  group_by(CCAA, PERIODO) |>
+  summarise(
+    alquiler = pmoy(prix_rent_reel, n_rent),            # pondéré par le stock de location
+    vt       = sum(vt, na.rm = TRUE),
+    .groups  = "drop"
+  ) |>
+  mutate(date = make_date(as.integer(substr(PERIODO, 1, 4)),
+                          as.integer(substr(PERIODO, 6, 7)), 1))
+
+# Contrôle : provinces sans CCAA
+d |> mutate(PROV = str_pad(as.character(PROV), 2, pad = "0")) |>
+  anti_join(ccaa_prov, by = "PROV") |> distinct(PROV)
+
+# --- Indices base 100 = ago. 2022 -------------------------------------------
+base <- as.Date("2022-08-01")
+
+ccaa_ind <- ccaa_sem |>
+  filter(date >= base) |>
+  group_by(CCAA) |>
+  mutate(`Alquiler (euros constantes)` = 100 * alquiler / alquiler[date == base],
+         `Viviendas turísticas`        = 100 * vt / vt[date == base]) |>
+  ungroup() |>
+  select(CCAA, date, `Alquiler (euros constantes)`, `Viviendas turísticas`) |>
+  pivot_longer(-c(CCAA, date), names_to = "serie", values_to = "indice") |>
+  filter(!CCAA %in% c("Ceuta", "Melilla"))   # séries trop instables ; à retirer si besoin
+
+# --- Graphique ---------------------------------------------------------------
+ggplot(ccaa_ind, aes(date, indice, colour = serie)) +
+  geom_hline(yintercept = 100, colour = "grey70") +
+  geom_vline(xintercept = as.Date("2024-09-30"), linetype = "dotted", colour = "grey60") +
+  geom_line(linewidth = .8) +
+  geom_point(size = 1.2) +
+  facet_wrap(~ CCAA, ncol = 4) +
+  scale_colour_manual(values = c("Alquiler (euros constantes)" = "#E6550D",
+                                 "Viviendas turísticas"        = "#41AB5D"),
+                      name = NULL) +
+  scale_x_date(date_breaks = "1 year", date_labels = "%Y") +
+  labs(title    = "Viviendas turísticas y alquiler por comunidad autónoma",
+       subtitle = "Índice, ago. 2022 = 100. Alquiler: media ponderada por el stock de anuncios, en euros constantes de 2026",
+       x = NULL, y = NULL,
+       caption  = "Línea punteada: cambio de los meses de referencia de la estadística de viviendas turísticas (feb./ago. → may./nov.).\nFuente: INE; idealista") +
+  theme_minimal(base_size = 10) +
+  theme(legend.position      = "top",
+        legend.justification = "left",
+        panel.grid.minor     = element_blank(),
+        strip.text           = element_text(face = "bold", hjust = 0),
+        plot.title.position  = "plot",
+        plot.caption         = element_text(hjust = 0))
+
+```
+
+```{r}
+# --- 1. Une ligne par distrito avec niveaux et évolutions ------------------
+evol_paire <- function(data, p0, p1, min_stock = 10) {
+  data |>
+    filter(PERIODO %in% c(p0, p1)) |>
+    mutate(t = if_else(PERIODO == p0, "0", "1")) |>
+    select(CUDIS, PROV, t,
+           pct  = pct_vt,
+           rent = prix_rent_reel, sale = prix_sale_reel,
+           n_rent, n_sale) |>
+    pivot_wider(id_cols = c(CUDIS, PROV), names_from = t,
+                values_from = c(pct, rent, sale, n_rent, n_sale)) |>
+    mutate(
+      d_pct  = pct_1 - pct_0,                                   # points de %
+      d_rent = if_else(n_rent_0 >= min_stock & n_rent_1 >= min_stock,
+                       log(rent_1 / rent_0), NA_real_),          # ≈ % de variation
+      d_sale = if_else(n_sale_0 >= min_stock & n_sale_1 >= min_stock,
+                       log(sale_1 / sale_0), NA_real_)
+    )
+}
+
+# --- 2. Tableau de corrélations (Spearman), brut et au sein des provinces ---
+cor_tab <- function(ev, label) {
+  sp <- function(x, y) cor(x, y, method = "spearman", use = "complete.obs")
+  nn <- function(x, y) sum(!is.na(x) & !is.na(y))
+  ctr <- function(x) x - mean(x, na.rm = TRUE)
+
+  iv <- ev |>
+    group_by(PROV) |>
+    mutate(across(c(pct_1, rent_1, sale_1, pct_0, d_pct, d_rent, d_sale), ctr,
+                  .names = "{.col}_c")) |>
+    ungroup()
+
+  tibble(
+    periodo  = label,
+    relacion = c("Nivel: % VT vs alquiler", "Nivel: % VT vs venta",
+                 "Δ % VT vs Δ alquiler",    "Δ % VT vs Δ venta",
+                 "% VT inicial vs Δ alquiler", "% VT inicial vs Δ venta"),
+    n   = c(nn(ev$pct_1, ev$rent_1), nn(ev$pct_1, ev$sale_1),
+            nn(ev$d_pct, ev$d_rent), nn(ev$d_pct, ev$d_sale),
+            nn(ev$pct_0, ev$d_rent), nn(ev$pct_0, ev$d_sale)),
+    rho = c(sp(ev$pct_1, ev$rent_1), sp(ev$pct_1, ev$sale_1),
+            sp(ev$d_pct, ev$d_rent), sp(ev$d_pct, ev$d_sale),
+            sp(ev$pct_0, ev$d_rent), sp(ev$pct_0, ev$d_sale)),
+    rho_intra_prov = c(sp(iv$pct_1_c, iv$rent_1_c), sp(iv$pct_1_c, iv$sale_1_c),
+                       sp(iv$d_pct_c, iv$d_rent_c), sp(iv$d_pct_c, iv$d_sale_c),
+                       sp(iv$pct_0_c, iv$d_rent_c), sp(iv$pct_0_c, iv$d_sale_c))
+  )
+}
+
+ev_a <- evol_paire(d, "2022M08", "2024M08")
+ev_b <- evol_paire(d, "2025M05", "2026M05")
+
+resultats <- bind_rows(cor_tab(ev_a, "ago. 2022 → ago. 2024"),
+                       cor_tab(ev_b, "may. 2025 → may. 2026"))
+
+resultats |> mutate(across(c(rho, rho_intra_prov), ~ round(.x, 3)))
+```
+
+
