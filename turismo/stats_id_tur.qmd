@@ -8,10 +8,15 @@ library(tidyverse)
 library(sf)
 library(scales)
 library(mapSpain)
+library(officer)
+library(janitor)
 ```
 
 
 ```{r}
+#| echo: false 
+#| output: false 
+
 tmp <- tempfile(fileext = ".R")
 knitr::purl("/home/onyxia/work/UGR/turismo/turismo_districto.qmd", output = tmp, quiet = TRUE)
 
@@ -64,6 +69,8 @@ ipc_ref <- inflation |> filter(annee == 2026, mois %in% c(3, 6)) |> pull(ipc) |>
 ```
 
 ```{r}
+#| echo: false 
+
 d <- distrito_sem |>
   mutate(
     year  = as.integer(substr(PERIODO, 1, 4)),
@@ -83,7 +90,13 @@ d <- distrito_sem |>
   )
 ```
 
+# I. General overview of touristic housing, municipal level 2020-2026
+
+## I.a) Evolution of touristic housing in Spain 
+
 ```{r}
+#| echo: false 
+
 vt_nat <- d |>
   group_by(PERIODO, date, year) |>
   summarise(vt = sum(vt, na.rm = TRUE),
@@ -127,7 +140,12 @@ ggplot(vt_nat, aes(date, vt)) +
         axis.text.x = element_text(size = 8, lineheight = .9),
         plot.title.position = "plot")
 ```
+
+Comparing different sources of information relative to touristic housing (INE) 
+
 ```{r}
+#| echo: false 
+
 lab_vt  <- "Tourist dwellings (INE, platforms)"
 lab_apt <- "Tourist apartments (INE, occupancy survey)"
 
@@ -168,6 +186,8 @@ ggplot(vt_nat, aes(date, vt)) +
 
 ```
 ```{r}
+#| echo: false 
+
 ggplot(vt_nat, aes(date, plazas)) +
   geom_line(linewidth = .9, colour = "#2C7FB8") +
   geom_point(size = 2.2, colour = "#2C7FB8") +
@@ -186,14 +206,14 @@ ggplot(vt_nat, aes(date, plazas)) +
 
 ```
 
+The difference between the two sources is not that alarming given that they do not measure the same thing, although it is a bit curious that dynamics/evolution are different. Maybe we detect an increase in plateforme use the conversion of classic housing into touristic housing ? In this regard, the difference between scrapped data and the more "official" (hotel, touristic apartment) data could be a sort of indicator of "overflow" of tourism that replaces classic housing by touristic one. Could be interesting but "official" touristic housing are only at province level...
 
-Finalement ce n'est pas si grave la ≠ entre les sources de données car elles ne mesurent pas la même chose, même si c'est un peu curieux que les dynamiques soient différentes, peut-être peut-on y voir une augmentation de l'utilisation des plateformes et de la transition de logements en logements touristiques ce qui est précisément ce qu'on cherche à étudier. En ce sens la différence entre cette base et celle des hôtels / logements touristiques plus classiques peut servir d'indicateur du débordement de l'activité touristique sur le logement ? piste intéressante mais les données des logements "officiels" ne sont qu'au niveau provincial... 
-
-# I. TOURISME 
-## I.a) Évolution du logement touristique
+### I.a) i- Por provincia 
 
 
 ```{r}
+#| echo: false 
+
 vt_prov <- d |>
   group_by(PROV, PROV_LITERAL, PERIODO, date, season) |>
   summarise(vt = sum(vt, na.rm = TRUE), .groups = "drop")
@@ -208,6 +228,8 @@ vt_prov |>
 ```
 
 ```{r}
+#| echo: false 
+
 provs <- c("08" = "Barcelona", "28" = "Madrid", "07" = "Illes Balears",
            "18" = "Granada",   "23" = "Jaén", "46" = "Valencia")
 
@@ -270,19 +292,27 @@ ggplot(vt_prov_sel, aes(date, vt)) +
   labs(x = NULL, y = NULL, title = "Tourist dwellings by province") +
   theme_minimal(base_size = 11)
 ```
-- Lois en 2024 à Madrid ? oui https://lepetitjournal.com/madrid/logement/madrid-durcissement-reglementation-logement-touristique-383997 mais je ne sais pas à quel point ça a participé à la diminution 
+- 
+Ley en 2024 en Madrid ? si parece https://lepetitjournal.com/madrid/logement/madrid-durcissement-reglementation-logement-touristique-383997 but idk how much this participates in diminution 
 
-Quartiers avec le plus haut % 
+### I.a) ii- Districts with highest percentage of vivienda turistica 
+
 ```{r}
+#| echo: false 
+
 d |>
   filter(PERIODO == "2024M08") |>
   slice_max(pct_vt, n = 20) |>
   select(CUDIS, MUN_LITERAL, PROV_LITERAL, vt, pct_vt)
 ```
 
-## Precios de vivienda 
+# II. Precios de vivienda 
+
+## II. a) Evolution of prices 
 
 ```{r}
+#| echo: false 
+
 
 pmoy <- function(prix, n) {
   if (all(is.na(prix))) return(NA_real_)
@@ -306,6 +336,8 @@ log_nat
 ```
 
 ```{r}
+#| echo: false 
+
 prix_nat <- id_dis |>
   group_by(PERIOD) |>
   summarise(
@@ -359,9 +391,9 @@ ggplot(prix_nat, aes(PERIOD)) +
 ```
 
 
-
-
 ```{r}
+#| echo: false 
+
 resumen_nat <- d |>
   group_by(PERIODO) |>
   summarise(
@@ -378,7 +410,13 @@ resumen_nat <- d |>
 
 resumen_nat
 ```
+
+## II. b) Links between rent prices & vivienda turistica per CCAA
+
+
 ```{r}
+#| echo: false 
+
 
 # --- Correspondance province -> CCAA (codes INE) ---------------------------
 ccaa_prov <- list(
@@ -462,6 +500,8 @@ ggplot(ccaa_ind, aes(date, indice, colour = serie)) +
 ```
 
 ```{r}
+#| echo: false 
+
 # --- 1. Une ligne par distrito avec niveaux et évolutions ------------------
 evol_paire <- function(data, p0, p1, min_stock = 10) {
   data |>
@@ -519,5 +559,161 @@ resultats <- bind_rows(cor_tab(ev_a, "ago. 2022 → ago. 2024"),
 
 resultats |> mutate(across(c(rho, rho_intra_prov), ~ round(.x, 3)))
 ```
+```{r}
+#| echo: false 
+
+# --- 1. Variables -------------------------------------------------------------
+ev_a <- evol_paire(d, "2022M08", "2024M08", min_stock = 10)
+
+etiquetas <- c(
+  pct_0  = "% VT (nivel 2022)",
+  rent_0 = "Alquiler (nivel 2022)",
+  sale_0 = "Venta (nivel 2022)",
+  d_pct  = "Δ % VT (puntos)",
+  d_rent = "Δ alquiler (%)",
+  d_sale = "Δ venta (%)"
+)
+
+x <- ev_a |> select(all_of(names(etiquetas)))
+
+# --- 2. Corrélations et effectifs (paires complètes) -------------------------
+mat_cor <- cor(x, method = "spearman", use = "pairwise.complete.obs")
+mat_n   <- crossprod(!is.na(as.matrix(x)))   # nb de distritos par paire
+
+round(mat_cor, 2)
+mat_n
+
+# --- 3. Graphique (triangle inférieur) ---------------------------------------
+cor_long <- as.data.frame(as.table(mat_cor)) |>
+  setNames(c("v1", "v2", "rho")) |>
+  left_join(as.data.frame(as.table(mat_n)) |> setNames(c("v1", "v2", "n")),
+            by = c("v1", "v2")) |>
+  mutate(i = match(v1, names(etiquetas)), j = match(v2, names(etiquetas))) |>
+  filter(i > j) |>
+  mutate(v1 = factor(etiquetas[as.character(v1)], levels = etiquetas),
+         v2 = factor(etiquetas[as.character(v2)], levels = etiquetas))
+
+ggplot(cor_long, aes(v2, v1, fill = rho)) +
+  geom_tile(colour = "white") +
+  geom_text(aes(label = paste0(format(round(rho, 2), decimal.mark = ","),
+                               "\nn = ", format(n, big.mark = "."))),
+            size = 3, lineheight = .9) +
+  scale_fill_distiller(palette = "RdBu", direction = 1, limits = c(-1, 1),
+                       name = "ρ de Spearman") +
+  scale_y_discrete(limits = rev) +
+  labs(title = "Correlaciones entre intensidad turística y precios por distrito",
+       subtitle = "Niveles en ago. 2022 y variaciones ago. 2022 – ago. 2024 (precios en euros constantes)",
+       x = NULL, y = NULL,
+       caption = "Distritos con al menos 10 anuncios en ambas fechas para las variaciones de precio.\nFuente: INE; idealista") +
+  theme_minimal(base_size = 11) +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1),
+        panel.grid = element_blank(),
+        plot.title.position = "plot",
+        plot.caption = element_text(hjust = 0))
+```
+
+```{r}
+#| echo: false 
+
+# --- 1. Rattacher la CCAA (table ccaa_prov définie plus haut) ---------------
+ev_ccaa <- ev_a |>
+  mutate(PROV = str_pad(as.character(PROV), 2, pad = "0")) |>
+  left_join(ccaa_prov, by = "PROV")
+
+ev_ccaa |> filter(is.na(CCAA)) |> distinct(PROV)   # contrôle
+
+# --- 2. Corrélations par CCAA -------------------------------------------------
+relaciones <- tribble(
+  ~x,      ~y,       ~relacion,
+  "pct_0", "rent_0", "Nivel: % VT vs alquiler",
+  "pct_0", "sale_0", "Nivel: % VT vs venta",
+  "d_pct", "d_rent", "Δ % VT vs Δ alquiler",
+  "d_pct", "d_sale", "Δ % VT vs Δ venta"
+)
+
+cor_ccaa <- relaciones |>
+  pmap_dfr(function(x, y, relacion) {
+    ev_ccaa |>
+      group_by(CCAA) |>
+      summarise(
+        n   = sum(!is.na(.data[[x]]) & !is.na(.data[[y]])),
+        rho = if (n >= 3) cor(.data[[x]], .data[[y]], method = "spearman",
+                              use = "complete.obs") else NA_real_,
+        .groups = "drop"
+      ) |>
+      mutate(relacion = relacion)
+  }) |>
+  mutate(
+    # IC à 95 % approximatif (transformation de Fisher, variance corrigée pour Spearman)
+    se_z   = sqrt(1.06 / (n - 3)),
+    ic_inf = tanh(atanh(rho) - 1.96 * se_z),
+    ic_sup = tanh(atanh(rho) + 1.96 * se_z),
+    relacion = factor(relacion, levels = relaciones$relacion)
+  )
+
+cor_ccaa |>
+  select(relacion, CCAA, n, rho, ic_inf, ic_sup) |>
+  mutate(across(c(rho, ic_inf, ic_sup), ~ round(.x, 2))) |>
+  arrange(relacion, desc(rho)) |>
+  print(n = Inf)
+
+# --- 3. Graphique : un point par CCAA, avec intervalle ------------------------
+cor_ccaa |>
+  filter(n >= 30) |>
+  ggplot(aes(rho, reorder(CCAA, rho))) +
+  geom_vline(xintercept = 0, colour = "grey60") +
+  geom_errorbarh(aes(xmin = ic_inf, xmax = ic_sup), height = 0, colour = "grey60") +
+  geom_point(aes(size = n), colour = "#2C7FB8") +
+  facet_wrap(~ relacion, ncol = 2) +
+  scale_size_area(max_size = 4, name = "Distritos") +
+  labs(title = "Correlación entre intensidad turística y precios, por comunidad autónoma",
+       subtitle = "ρ de Spearman entre distritos. Niveles en ago. 2022; variaciones ago. 2022 – ago. 2024",
+       x = "ρ de Spearman (IC 95 % aproximado)", y = NULL,
+       caption = "Solo comunidades con al menos 30 distritos para cada relación.\nFuente: INE; idealista") +
+  theme_minimal(base_size = 10) +
+  theme(panel.grid.minor = element_blank(),
+        strip.text = element_text(face = "bold", hjust = 0),
+        plot.title.position = "plot",
+        plot.caption = element_text(hjust = 0))
+```
+
+Correlation between percentage of touristic housing and rental / sales prices are detected in most regions, most particularly for sales. This seems logical because 
+There is little correlation between the evolution of touristic housing density and evolution of rental / sales prices. A bit of positive correlation can be found in andalucia, valencia y cantabria between evolution of sales price and % of vivienda turistica. Some positive correlation as well between evo of touristic density and evolution of rental prices in Cataluna and Aragon. 
+
+
+```{r}
+#| echo: false 
+
+cor_par_groupe <- function(ev, groupe, x, y, n_min = 30) {
+  ev |>
+    group_by(across(all_of(groupe))) |>
+    summarise(
+      n   = sum(!is.na(.data[[x]]) & !is.na(.data[[y]])),
+      rho = if (n >= 3) cor(.data[[x]], .data[[y]], method = "spearman",
+                            use = "complete.obs") else NA_real_,
+      .groups = "drop"
+    ) |>
+    filter(n >= n_min) |>
+    mutate(
+      se_z   = sqrt(1.06 / (n - 3)),
+      ic_inf = tanh(atanh(rho) - 1.96 * se_z),
+      ic_sup = tanh(atanh(rho) + 1.96 * se_z),
+      p      = 2 * pnorm(-abs(atanh(rho) / se_z)),
+      p_bh   = p.adjust(p, method = "BH")          # correction tests multiples
+    ) |>
+    arrange(desc(ic_inf))                          # tri par la borne basse
+}
+
+prov_rent <- cor_par_groupe(ev_a, c("PROV"), "d_pct", "d_rent")
+prov_sale <- cor_par_groupe(ev_a, c("PROV"), "d_pct", "d_sale")
+
+prov_sale |>
+  left_join(distinct(d, PROV, PROV_LITERAL), by = "PROV") |>
+  select(PROV_LITERAL, n, rho, ic_inf, ic_sup, p_bh) |>
+  mutate(across(c(rho, ic_inf, ic_sup), ~ round(.x, 2))) |>
+  print(n = Inf)
+```
+
+
 
 
