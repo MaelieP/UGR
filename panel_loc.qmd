@@ -7,18 +7,26 @@ editor: visual
 
 Ce script ajoute la seccion censal au panel
 
+/!\\ Pas besoin de relancer car c'est bon la seccion censal a été ajoutée au panle déjà !!
+
 ```{r}
 library(data.table)
+library(arrow)
 library(stringi)
 ```
 
 ```{r}
-ARCHIVE <- "/home/onyxia/work/UGR/Panel_Hogares.rar"   # <- à adapter
+ARCHIVE <- "/home/onyxia/work/UGR/Panel_Hogares.rar"  
 OUT     <- "~/work/UGR/panel_income_2016_2023"
-PANEL   <- readRDS(file.path(OUT, "panel_persons_2016_2023.rds"))
+
+bkt   <- s3_bucket("mperier", endpoint_override = Sys.getenv("AWS_S3_ENDPOINT"))
+PANEL <- setDT(read_parquet(bkt$path("panel_hogares/panel_persons_2016_2023_sec.parquet")))
 ```
 
 ```{r}
+
+#system("sudo apt-get update && sudo apt-get install -y unar unrar")
+#Sys.which(c("unrar", "lsar"))   # les deux doivent renvoyer un chemin
 
 members <- system2("unrar", c("lb", shQuote(ARCHIVE)), stdout = TRUE)
 iden_member <- function(y) {
