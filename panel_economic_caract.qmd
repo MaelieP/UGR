@@ -1,0 +1,85 @@
+---
+title: "panel_economic_caract"
+format: html
+editor: visual
+---
+
+## Goal
+
+The goal of this script is to begin linking panel data with idealista prices
+
+```{r}
+#| echo: false
+#| output: false
+
+suppressPackageStartupMessages({
+  library(data.table)
+  library(arrow)
+})
+
+
+bkt   <- s3_bucket("mperier", endpoint_override = Sys.getenv("AWS_S3_ENDPOINT"))
+
+
+```
+
+```{r}
+
+PANEL     <- setDT(read_parquet(bkt$path("panel_hogares/panel_persons_2016_2023_sec.parquet")))
+#mod_moves <- setDT(read_parquet(bkt$path("panel_hogares/mod_moves.parquet")))
+
+#n0 <- nrow(PANEL)
+#PANEL <- mod_moves[PANEL, on = .(IDENPER, year)]   # keeps all PANEL rows
+#stopifnot(nrow(PANEL) == n0)                        # no duplicated or lost rows
+```
+
+```{r}
+library(ggplot2)
+
+# Ménages sans aucune information (eq_rbd = 0 artificiel) : exclus
+PANEL[, hh_na := all(is.na(own_rb)), by = .(year, IDENHOG)]
+
+qs <- PANEL[!is.na(w) & !hh_na,
+            .(q = c("Q1", "Médiane", "Q3"),
+              val = wq(eq_rbd, w, c(.25, .5, .75))),
+            by = year]
+
+ggplot(qs, aes(year, val, colour = q)) +
+  geom_line(linewidth = 1) +
+  geom_point() +
+  scale_x_continuous(breaks = 2016:2023) +
+  scale_y_continuous(labels = scales::label_number(big.mark = " ", suffix = " €")) +
+  labs(x = NULL, y = "Revenu disponible par UC (euros 2023)", colour = NULL,
+       #caption = "Pondéré par w ; hors ménages sans information fiscale ; hors País Vasco et Navarra"
+       ) +
+  theme_minimal()
+```
+
+```{r}
+#| echo: false
+# ---- 9. First-look tables -------------------------------------------
+wq <- function(x, w, probs) {                       # weighted quantiles
+  k <- !is.na(x) & !is.na(w); x <- x[k]; w <- w[k]
+  o <- order(x); x <- x[o]; w <- w[o]
+  cw <- cumsum(w) / sum(w)
+  sapply(probs, function(p) x[which(cw >= p)[1]])
+}
+
+# 9a. Mobility in relative position, not income growth. Quintile cut points
+# of equivalised disposable income are recomputed from each year's full
+# cross-section, so the table shows where a person sits in the 2023
+# distribution given where they sat in 2016. Persons present in both years,
+# weighted by w2016; each row sums to 100.
+cuts <- PANEL[, .(cut = list(wq(eq_rbd, w, c(.2, .4, .6, .8)))), by = year]
+PANEL[cuts, q_rbd := findInterval(eq_rbd, unlist(i.cut), left.open = TRUE) + 1L,
+      on = "year", by = .EACHI]
+mob <- merge(PANEL[year == 2016L, .(IDENPER, q2016 = q_rbd, w2016)],
+             PANEL[year == 2023L, .(IDENPER, q2023 = q_rbd)], by = "IDENPER")
+mob_tab <- mob[, .(w = sum(w2016)), by = .(q2016, q2023)]
+mob_tab[, pct := round(100 * w / sum(w), 1), by = q2016]
+mob_wide <- dcast(mob_tab, q2016 ~ q2023, value.var = "pct", fill = 0)
+print(mob_wide)
+#fwrite(mob_wide, file.path(OUT_DIR, "03_mobility_q2016_q2023.csv"))
+
+
+```

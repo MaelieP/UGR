@@ -13,3 +13,5 @@
 *.prj
 *.shx
 *.CPG
+/.quarto/
+**/*.quarto_ipynb

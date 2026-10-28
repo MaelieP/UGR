@@ -1,8 +1,0 @@
-project:
-  type: default
-  output-dir: "/Users/maelieperier/Library/Mobile Documents/iCloud~md~obsidian/Documents/DIME vivienda/Renders"   # dossier dans ton vault
-
-format:
-  gfm:
-    wrap: none          # évite les retours à la ligne forcés
-    fig-format: png     # images statiques, lisibles par Obsidian

@@ -108,28 +108,9 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </header>
 
 
-<p>Calcule le nmb de déménagements</p>
-<div class="cell">
-<div class="cell-output cell-output-stdout">
-<pre><code>   obs_prev prev_is_t1        N
-     &lt;lgcl&gt;     &lt;lgcl&gt;    &lt;int&gt;
-1:    FALSE      FALSE  5043007
-2:     TRUE       TRUE 16823238</code></pre>
-</div>
-</div>
-<div class="cell">
-<div class="cell-output cell-output-stdout">
-<pre><code>    year transitions recodages hog_recodes hog_tous
-   &lt;int&gt;       &lt;int&gt;     &lt;int&gt;       &lt;int&gt;    &lt;int&gt;
-1:  2017       38301       174        3458    45287
-2:  2018       41399       172        3050    48046
-3:  2019       43128        50         755    46871
-4:  2020       38608        62        1615    42693
-5:  2021       46766       122        2776    53251
-6:  2022       46263       257        6617    57969
-7:  2023       61793       274        6530    81287</code></pre>
-</div>
-</div>
+<p>The goal of this script is to grasp, quantify and describe residential mobility of the people &amp; households in the panel :</p>
+<p>We use multiple definitions of <em>moving</em> in this script the most flexible one being “change of <strong>seccion censal”</strong> between two years (given that this is not just a recoding of the section). Further down in this script we prefer to use the change of <strong>district</strong> between two years. We prefer districts because they are less likely to change between years and because it is easier to link this panel to any other database if we use the district level than the seccion censal (less common).</p>
+<p>Number and proportion of movers in 2017-2023</p>
 <div class="cell">
 <div class="cell-output cell-output-stdout">
 <pre><code>
@@ -143,6 +124,20 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </div>
 </div>
 <p><code>move</code> = 1 if the person’s census section changed between t−1 and t, unless the change is a recoding (same municipality, ≥ 40 % of the origin section’s households making the same transition, and at least 2 households). Changes of municipality are always counted as moves. NA if the person is not observed in t−1 or the section is missing.</p>
+<p>Looking at the district level definition :</p>
+<div class="cell">
+<div class="cell-output cell-output-stdout">
+<pre><code>
+   FALSE     TRUE     &lt;NA&gt; 
+15952784   870454  5043007 </code></pre>
+</div>
+<div class="cell-output cell-output-stdout">
+<pre><code>
+     FALSE       TRUE 
+0.94825883 0.05174117 </code></pre>
+</div>
+</div>
+<p>If we tolerate a change of district between <em>t-2</em> and <em>t</em> rather than <em>t-1</em> and <em>t</em> when the person is absent of the panel in <em>t-1</em> the number and proportion of movers is very slightly higher</p>
 <div class="cell">
 <div class="cell-output cell-output-stdout">
 <pre><code>
@@ -196,6 +191,9 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </div>
 </div>
 <p><code>move_dist_ext</code> = 1 if the person’s district changed between their previous observation and year t, allowing a one-year gap. If the person is observed in t−1, it equals <code>move_dist</code>(districts are assumed never recoded) : a change of district (first 7 digits of the census section code) that is not a section recoding. If the person is absent in t−1 but observed in t−2, it is the raw change of district between t−2 and t; recodings cannot be excluded in this case. NA if the person is not observed in t−1 or t−2, or if the district is missing. <code>dist_comp</code> indicates which comparison was used (“t-1” or “t-2”).</p>
+<p><strong>=&gt; Tolerating for an extra year of interval doesn’t add that much information and complicates year-level interpretation so we tend to prefer the strict definition : moving = changing district between t-1 and t</strong></p>
+<section id="proportion-of-movers-per-year-and-type-of-moving" class="level4">
+<h4 class="anchored" data-anchor-id="proportion-of-movers-per-year-and-type-of-moving">Proportion of movers per year and type of moving :</h4>
 <div class="cell">
 <div class="cell-output cell-output-stdout">
 <pre><code>[1] "Number of moves (defined as district change) in the total panel :870454"</code></pre>
@@ -212,6 +210,55 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 7:  2023 2767975 71835    6.72  6.11  3.85     4.07  2.19  0.82</code></pre>
 </div>
 </div>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Variable</th>
+<th>Definition</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>n_t1</code></td>
+<td>Number of persons observed in both t−1 and t (rows used for the yearly rates)</td>
+</tr>
+<tr class="even">
+<td><code>n_t2</code></td>
+<td>Number of extra persons absent in t−1 but observed in t−2, added only in <code>dist_ext</code></td>
+</tr>
+<tr class="odd">
+<td><code>raw_sec</code></td>
+<td>% of persons whose census section changed between t−1 and t, section recodings included</td>
+</tr>
+<tr class="even">
+<td><code>move</code></td>
+<td>% of persons whose census section changed between t−1 and t, recodings excluded: <strong>the move rate</strong></td>
+</tr>
+<tr class="odd">
+<td><code>dist</code></td>
+<td><strong>% of persons whose district changed between t−1 and t (districts assumed never recoded)</strong></td>
+</tr>
+<tr class="even">
+<td><code>dist_ext</code></td>
+<td>Same as <code>dist</code>, plus persons absent in t−1 compared with t−2 (two-year interval)</td>
+</tr>
+<tr class="odd">
+<td><code>mun</code></td>
+<td>% of persons whose municipality changed between t−1 and t</td>
+</tr>
+<tr class="even">
+<td><code>prov</code></td>
+<td>% of persons whose province changed between t−1 and t</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="of-movers-by-type-of-moves-age" class="level4">
+<h4 class="anchored" data-anchor-id="of-movers-by-type-of-moves-age">% of movers by type of moves &amp; age</h4>
 <div class="cell">
 <div class="cell-output cell-output-stdout">
 <pre><code>    year    raw_sec       move  move_dist        mun        prov
@@ -277,19 +324,20 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </tr>
 </tbody>
 </table>
+</section>
 <section id="moves-at-household-level" class="level3">
 <h3 class="anchored" data-anchor-id="moves-at-household-level">Moves at household level</h3>
 <div class="cell">
 <div class="cell-output cell-output-stdout">
-<pre><code>    year   any_move   all_move    all_dis        mun        prov
-   &lt;int&gt;      &lt;num&gt;      &lt;num&gt;      &lt;num&gt;      &lt;num&gt;       &lt;num&gt;
-1:  2017 0.08786194 0.03264815 0.02297902 0.01509146 0.005907268
-2:  2018 0.08675666 0.03897399 0.02871934 0.01876138 0.007201343
-3:  2019 0.08078986 0.03973870 0.02934248 0.01962150 0.007563460
-4:  2020 0.06821283 0.03432755 0.02585257 0.01777471 0.006708481
-5:  2021 0.07985691 0.04412880 0.03243804 0.02190155 0.008405683
-6:  2022 0.08227803 0.04411283 0.03197974 0.02091558 0.007962452
-7:  2023 0.09438477 0.05392825 0.03407463 0.02003562 0.007914910</code></pre>
+<pre><code>    year any_move all_move all_dis   mun  prov
+   &lt;int&gt;    &lt;num&gt;    &lt;num&gt;   &lt;num&gt; &lt;num&gt; &lt;num&gt;
+1:  2017     8.79     3.26    2.30  1.51  0.59
+2:  2018     8.68     3.90    2.87  1.88  0.72
+3:  2019     8.08     3.97    2.93  1.96  0.76
+4:  2020     6.82     3.43    2.59  1.78  0.67
+5:  2021     7.99     4.41    3.24  2.19  0.84
+6:  2022     8.23     4.41    3.20  2.09  0.80
+7:  2023     9.44     5.39    3.41  2.00  0.79</code></pre>
 </div>
 </div>
 <p><strong>All_move</strong> = the entire household moves (defined as in seccion censal change)</p>
