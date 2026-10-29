@@ -83,3 +83,234 @@ print(mob_wide)
 
 
 ```
+
+```{r}
+AN_DIR  <- file.path("panel_hogares", "analyse")
+dir.create(AN_DIR, showWarnings = FALSE, recursive = TRUE)
+ 
+#if (!exists("PANEL")) PANEL <- readRDS(file.path(OUT_DIR, "panel_persons_2016_2023.rds"))
+ 
+EXCLURE_HH_VIDES <- TRUE        # ménages dont aucun membre n'a de RB (eq_* = 0 artificiel)
+CAP              <- 3e6         # seuil INE sur les revenus individuels (voir A1)
+MOB_DEBUTS       <- c(2016, 2017)  # 2017 = test de sensibilité aux NA de 2016
+MOB_FIN          <- 2023
+BALANCED_ONLY    <- TRUE        # mobilité longue sur les personnes présentes dans les 8 vagues
+FENETRES_PAUV    <- list(2016:2019, 2020:2023)
+ 
+# Sources dont la somme donne eq_rb (D5 du script de construction)
+SRC <- c("eq_wages", "eq_pens", "eq_ben", "eq_cap", "eq_rent",
+         "eq_bus", "eq_gains", "eq_other")
+ 
+# ---- Fonctions ------------------------------------------------------
+wm <- function(x, w) sum(x * w) / sum(w)
+ 
+wq <- function(x, w, probs) {                      # quantiles pondérés
+  o <- order(x); x <- x[o]; cw <- cumsum(w[o]) / sum(w)
+  sapply(probs, function(p) x[which(cw >= p)[1]])
+}
+ 
+# Rang pondéré dans [0, 1] (point milieu, ex aequo au même rang).
+# x et w sans NA.
+wrank <- function(x, w) {
+  o  <- order(x)
+  dt <- data.table(x = x[o], p = w[o] / sum(w))
+  dt[, cp := cumsum(p)]
+  dt[, F := (cp[.N] + cp[1L] - p[1L]) / 2, by = x]   # milieu du bloc d'ex aequo
+  r <- numeric(length(x)); r[o] <- dt$F; r
+}
+ 
+# Coefficient de concentration de y classé selon le rang F (Gini si y = x)
+conc <- function(y, F, w) {
+  p <- w / sum(w); mu <- sum(p * y)
+  2 * sum(p * (y - mu) * (F - 0.5)) / mu
+}
+gini <- function(x, w) conc(x, wrank(x, w), w)
+ 
+top_share <- function(x, w, p) {
+  s <- wq(x, w, p); sum((w * x)[x > s]) / sum(w * x)
+}
+ 
+qgroup <- function(x, w, n)                        # n-tiles pondérés (1..n)
+  findInterval(x, wq(x, w, seq_len(n - 1) / n), left.open = TRUE) + 1L
+ 
+wcor <- function(a, b, w) {
+  p <- w / sum(w); ma <- sum(p * a); mb <- sum(p * b)
+  sum(p * (a - ma) * (b - mb)) / sqrt(sum(p * (a - ma)^2) * sum(p * (b - mb)^2))
+}
+ 
+save_csv <- function(x, nom) { fwrite(x, file.path(AN_DIR, nom)); invisible(x) }
+ 
+# ---- A. Échantillon d'analyse ---------------------------------------
+# A1. Le PANEL ne garde pas le RBD individuel, donc le plafond INE à ±3 M€
+# ne peut pas être appliqué membre par membre. Approximation : on exclut
+# les ménages dont un membre a |own_rb| > 3 M€ (très peu de ménages).
+# A2. Ménages sans aucune information : exclus si EXCLURE_HH_VIDES.
+# Les ménages partiellement renseignés (hh_incomplet) sont gardés et
+# sous-estimés ; leur part est affichée ci-dessous.
+PANEL[, `:=`(
+  hh_vide      = all(is.na(own_rb)),
+  hh_incomplet = any(is.na(own_rb) & (is.na(age) | age >= 18)) & !all(is.na(own_rb)),
+  hh_extreme   = any(abs(own_rb) > CAP, na.rm = TRUE)
+), by = .(year, IDENHOG)]
+ 
+diag_ech <- PANEL[!is.na(w), .(
+  pct_pers_hh_vide      = round(100 * wm(hh_vide, w), 1),
+  pct_pers_hh_incomplet = round(100 * wm(hh_incomplet, w), 1),
+  pers_hh_extreme       = sum(hh_extreme)
+), by = year][order(year)]
+print(diag_ech)
+#save_csv(diag_ech, "A_echantillon.csv")
+ 
+D <- PANEL[!is.na(w) & !hh_extreme & (!EXCLURE_HH_VIDES | !hh_vide),
+           c("year", "IDENPER", "IDENHOG", "w", "w2016", "balanced", "age", "sex",
+             "CCAA", "eq_rb", "eq_rbd", "eq_tax", SRC, "hh_any_rent"), with = FALSE]
+num <- c("eq_rb", "eq_rbd", "eq_tax", SRC)
+D[, (num) := lapply(.SD, as.numeric), .SDcols = num]
+D[, age_band := cut(age, c(-Inf, 17, 34, 49, 64, 74, Inf),
+                    labels = c("<18", "18-34", "35-49", "50-64", "65-74", "75+"))]
+ 
+# Contrôle : les sources somment à eq_rb (écarts d'arrondi seulement)
+print(D[, .(ecart_moyen_sources = round(wm(eq_rb - rowSums(.SD), w), 2)),
+        by = year, .SDcols = SRC][order(year)])
+
+```
+
+### Income distribution
+
+```{r}
+# =====================================================================
+# 1. DISTRIBUTION TRANSVERSALE
+# =====================================================================
+stats_one <- function(x, w) {
+  q <- wq(x, w, c(.1, .25, .5, .75, .9))
+  list(moyenne = round(wm(x, w)),
+       p10 = q[1], p25 = q[2], p50 = q[3], p75 = q[4], p90 = q[5],
+       p90_p10 = round(q[5] / q[1], 2),
+       gini    = round(gini(x, w), 4),
+       top10   = round(100 * top_share(x, w, .90), 2),
+       top1    = round(100 * top_share(x, w, .99), 2))
+}
+ 
+dist <- rbindlist(lapply(c("eq_rb", "eq_rbd"), function(v)
+  D[, c(list(var = v), stats_one(.SD[[1]], w)), by = year, .SDcols = v]))
+setorder(dist, var, year)
+print(dist)
+#save_csv(dist, "1a_distribution.csv")
+ 
+# 1b. Effet redistributif de l'impôt (IRPF + cotisations salariales)
+redis <- dcast(dist, year ~ var, value.var = "gini")
+redis[, effet_redistributif := round(eq_rb - eq_rbd, 4)]
+print(redis)
+#save_csv(redis, "1b_effet_redistributif.csv")
+ 
+# 1c. Taux moyen d'imposition par décile de revenu brut équivalent
+D[, dec_rb := qgroup(eq_rb, w, 10), by = year]
+tax_dec <- D[, .(rb_moyen   = round(wm(eq_rb, w)),
+                 taux_moyen = round(100 * sum(w * eq_tax) / sum(w * eq_rb), 1)),
+             by = .(year, dec_rb)][order(year, dec_rb)]
+#save_csv(tax_dec, "1c_taux_impot_decile.csv")
+print(dcast(tax_dec, dec_rb ~ year, value.var = "taux_moyen"))
+ 
+# 1d. Pauvreté : 60 % de la médiane de eq_rbd de l'année (seuil national,
+# sur le territoire du panel, sans País Vasco ni Navarra)
+D[, seuil := 0.6 * wq(eq_rbd, w, .5), by = year]
+D[, pauvre := eq_rbd < seuil]
+ 
+pauv_by <- function(by) D[, .(taux = round(100 * wm(pauvre, w), 1)), by = by]
+pauv_an  <- D[, .(seuil = seuil[1], taux = round(100 * wm(pauvre, w), 1)), by = year][order(year)]
+pauv_age <- dcast(pauv_by(c("year", "age_band")), age_band ~ year, value.var = "taux")
+pauv_sex <- dcast(pauv_by(c("year", "sex")),      sex ~ year,      value.var = "taux")
+pauv_cca <- dcast(pauv_by(c("year", "CCAA")),     CCAA ~ year,     value.var = "taux")
+print(pauv_an); print(pauv_age); print(pauv_sex)
+#save_csv(pauv_an,  "1d_pauvrete_annee.csv")
+#save_csv(pauv_age, "1d_pauvrete_age.csv")
+#save_csv(pauv_sex, "1d_pauvrete_sexe.csv")
+#save_csv(pauv_cca, "1d_pauvrete_ccaa.csv")
+
+```
+
+### Sources of income 
+
+#### Distribution of source of income by decile
+
+```{r}
+# Parts de chaque source dans eq_rb (en %). Dans le premier décile, eq_rb
+# est proche de 0 : les parts y sont instables et peuvent dépasser 100.
+comp <- function(by) {
+  x <- D[, c(list(rb = sum(w * eq_rb)), lapply(.SD, function(v) sum(w * v))),
+         by = by, .SDcols = SRC]
+  x[, (SRC) := lapply(.SD, function(v) round(100 * v / rb, 1)), .SDcols = SRC]
+  x[, rb := NULL]
+  setorderv(x, by)[]
+}
+D[, dec_rbd := qgroup(eq_rbd, w, 10), by = year]
+comp_dec <- comp(c("year", "dec_rbd"))
+comp_age <- comp(c("year", "age_band"))
+#save_csv(comp_dec, "2a_composition_decile.csv")
+#save_csv(comp_age, "2a_composition_age.csv")
+print(comp_dec[year %in% c(2016, 2023)])
+
+```
+
+| Variable | Source | Definition |
+|---------------------------|------------------|---------------------------|
+| `eq_wages` | M91 | Wages, employer pension contributions, severance pay |
+| `eq_pens` | M921 + R1212 | Pensions, incl. exempt incapacity pensions |
+| `eq_ben` | M922 + M923 − R1212 | Unemployment, family, dependency and other benefits, incl. IMV |
+| `eq_cap` | M93 | Interest, dividends and other capital income |
+| `eq_rent` | M94 | Rental income from real estate |
+| `eq_bus` | M95 | Self-employment and business income |
+| `eq_gains` | M96 | Net capital gains |
+| `eq_other` | M97 | Other income under special tax regimes |
+
+*All `eq_*` variables: household total ÷ modified OECD scale, in 2023 euros. The eight sources sum to `eq_rb`.*
+
+#### Rental income
+
+```{r}
+# 2b. Revenus locatifs : part des personnes dans un ménage qui en perçoit,
+# et part du total des loyers captée par le top 10 % de eq_rbd
+rent <- D[, .(pct_hh_loyer     = round(100 * wm(hh_any_rent, w), 1),
+              part_loyers_top10 = round(100 * sum((w * eq_rent)[dec_rbd == 10]) /
+                                          sum(w * eq_rent), 1)),
+          by = year][order(year)]
+print(rent)
+```
+
+- \~ 15% of people perceive rental income
+
+- The proportion of people collecting rental income increases every year between 2016 and 2023
+
+- People in the highest decile of disposable income collect half of the total rents
+
+```{r}
+# 2c. Décomposition du Gini de eq_rb par source (Lerman-Yitzhaki) :
+# G = somme_k s_k * C_k, avec s_k la part de la source et C_k son
+# coefficient de concentration selon le rang en eq_rb.
+gdec <- D[, {
+  F <- wrank(eq_rb, w); G <- conc(eq_rb, F, w); mu <- wm(eq_rb, w)
+  r <- rbindlist(lapply(SRC, function(s) {
+    y <- .SD[[s]]; sk <- wm(y, w) / mu
+    list(source = s, part = sk, concentration = conc(y, F, w))
+  }))
+  r[, contribution := part * concentration]
+  r[, `:=`(gini = G, pct_contribution = 100 * contribution / G)]
+  r
+}, by = year, .SDcols = SRC]
+num_g <- c("part", "concentration", "contribution", "gini", "pct_contribution")
+gdec[, (num_g) := lapply(.SD, round, 4), .SDcols = num_g]
+#save_csv(gdec, "2c_decomposition_gini.csv")
+print(dcast(gdec, source ~ year, value.var = "pct_contribution"))
+setorder(gdec, year)
+print(gdec)
+
+```
+
+|  |  |  |
+|---------------|----------------------|------------------------------------|
+| `part` | mean(source) / mean(`eq_rb`) | Weight of the source in total income. Example: 0.60 = 60% of gross income |
+| `concentration` | `conc(source, rank in eq_rb)` | Where the source sits in the distribution. Close to 1: concentrated among the rich. Close to 0: spread evenly. Negative: concentrated among the poor |
+| `contribution` | `part × concentration` | Gini points contributed by the source. Contributions sum to the Gini |
+| `gini` | Gini of `eq_rb` | Total Gini, same on every row of a given year |
+| `pct_contribution` | 100 × `contribution` / `gini` | Percentage of total inequality due to the source |
+| `residu_arrondi` | `gini` − Σ `contribution` | Should be close to 0. Non-zero when sources do not add up exactly to `eq_rb` (rounding, missing components) |
