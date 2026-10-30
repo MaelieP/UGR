@@ -283,6 +283,8 @@ print(rent)
 
 - People in the highest decile of disposable income collect half of the total rents
 
+#### Unequal distribution of the income source 
+
 ```{r}
 # 2c. Décomposition du Gini de eq_rb par source (Lerman-Yitzhaki) :
 # G = somme_k s_k * C_k, avec s_k la part de la source et C_k son
