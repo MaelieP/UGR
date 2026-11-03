@@ -32,8 +32,8 @@ INE[, `:=`(year = as.integer(year),
 
 
 PANEL <- setDT(read_parquet(bkt$path("panel_hogares/panel_persons_2016_2023_sec.parquet")))
-cols_start <- names(PANE)
-Lstopifnot(PANEL[!is.na(SECCION), all(nchar(SECCION) == 10L)])
+cols_start <- names(PANEL)
+stopifnot(PANEL[!is.na(SECCION), all(nchar(SECCION) == 10L)])
 PANEL[, DISTRITO := substr(SECCION, 1, 7)]
 PANEL[, obs_prev := obs_prev %in% TRUE]
 PANEL[, mun := paste0(CPRO, CMUN)]
@@ -113,7 +113,11 @@ PANEL[Tr[recode == TRUE], on = .(year, SECCION_p, SECCION), recode := TRUE]
 
 ```
 
-Number and proportion of movers in 2017-2023
+#### *Moving* at the seccion censal level
+
+The pb with this level of disagregation is that seccion censales change from one year to the next (delineation changes). This can be remediable connecting together INE's reference of seccion censales (although it is quite costly). However, the mutation of seccion censales **depend on population movements** so it is tricky to study population movements at their level (endogenous changes).
+
+Number and proportion of movers between 2017 and 2023 :
 
 ```{r move}
 #| echo: false
@@ -129,7 +133,15 @@ tab <- table(PANEL$move)
 prop.table(tab)
 ```
 
-`move` = 1 if the person’s census section changed between t−1 and t, unless the change is a recoding (same municipality, ≥ 40 % of the origin section’s households making the same transition, and at least 2 households). Changes of municipality are always counted as moves. NA if the person is not observed in t−1 or the section is missing.
+`r sum(PANEL$move, na.rm=T)` people changed seccion censal between one year and the next, being 7% of the people in the panel.
+
+`move` = 1 if the person’s census section changed between t−1 and t, **unless the change is a recoding** :
+
+we consider that their has been a recoding of the seccion censal when two secciones are 1) same municipality 2) That at least 2 and ≥ 40 % of households in the origin section make the same transition to the new section.
+
+Changes of municipality are always counted as moves. NA if the person is not observed in t−1 or the section is missing.
+
+#### *Moving* at the district level
 
 Looking at the district level definition :
 
@@ -145,7 +157,9 @@ prop.table(tab)
 
 ```
 
-If we tolerate a change of district between *t-2* and *t* rather than *t-1* and *t* when the person is absent of the panel in *t-1* the number and proportion of movers is very slightly higher
+`r sum(PANEL$move_dist, na.rm=T)` people changed district between one year and the next, being 5% of the people in the panel.
+
+If a person is unobserved in t-1, we can consider that they have moved by comparing their district in t-2 and t.
 
 ```{r move district extended in time }
 #| echo: false
@@ -165,9 +179,13 @@ PANEL[!is.na(move_dist_ext), dist_comp := fifelse(obs_prev, "t-1", "t-2")]
 PANEL[, .N, by = .(year, dist_comp, move_dist_ext)][order(year, dist_comp, move_dist_ext)]
 ```
 
-`move_dist_ext` = 1 if the person’s district changed between their previous observation and year t, allowing a one-year gap. If the person is observed in t−1, it equals `move_dist`(districts are assumed never recoded) : a change of district (first 7 digits of the census section code) that is not a section recoding. If the person is absent in t−1 but observed in t−2, it is the raw change of district between t−2 and t; recodings cannot be excluded in this case. NA if the person is not observed in t−1 or t−2, or if the district is missing. `dist_comp` indicates which comparison was used (“t-1” or “t-2”).
+Considering this, the number and proportion of movers is very slightly higher (`r sum(PANEL$move_dist_ext, na.rm=T)`) and 5,5%
+
+`move_dist_ext` = 1 if the person’s district changed between their previous observation and year t, allowing a one-year gap. If the person is observed in t−1, it equals `move_dist`(districts are assumed never recoded). If the person is absent in t−1 but observed in t−2, it is the change of district between t−2 and t. NA if the person is not observed in t−1 or t−2, or if the district is missing. `dist_comp` indicates which comparison was used (“t-1” or “t-2”).
 
 **=\> Tolerating for an extra year of interval doesn't add that much information and complicates year-level interpretation so we tend to prefer the strict definition : moving = changing district between t-1 and t**
+
+### Descriptive statistics : 
 
 #### Proportion of movers per year and type of moving :
 
@@ -183,7 +201,7 @@ wm <- function(x, w) { ok <- !is.na(x) & !is.na(w); sum(x[ok] * w[ok]) / sum(w[o
 rates <- PANEL[year >= 2017, .(
   n_t1     = sum(!is.na(move)),             # rows compared with t-1
   n_t2     = sum(dist_comp %in% "t-2"),     # extra rows compared with t-2 (gap)
-  raw_sec  = wm(move_sec,          w),      # section change, recodes included
+ # raw_sec  = wm(move_sec,          w),      # section change, recodes included
   move     = wm(move,              w),      # section change, recodes excluded = move rate
   dist     = wm(move_dist,     w),          # district change (districts assumed never recoded)
   dist_ext = wm(move_dist_ext,     w),      # dist + people absent in t-1 (t-2 comparison)
@@ -199,7 +217,7 @@ rates[]
 ```
 
 | Variable | Definition |
-|----|----|
+|------------------------------------|------------------------------------|
 | `n_t1` | Number of persons observed in both t−1 and t (rows used for the yearly rates) |
 | `n_t2` | Number of extra persons absent in t−1 but observed in t−2, added only in `dist_ext` |
 | `raw_sec` | \% of persons whose census section changed between t−1 and t, section recodings included |
@@ -210,6 +228,13 @@ rates[]
 | `prov` | \% of persons whose province changed between t−1 and t |
 
 #### % of movers by type of moves & age
+
+Moves can be entire households moving or people moving out / into new households :
+
+| origin / dest | `same_group (no newcomers)` | `with_others (with newcomers)` |
+|------------------------|------------------------|------------------------|
+| **`whole`** (entire household, including one-person households) | the household moves as it is | the household moves in with others |
+| **`part`** (part of the household leaves) | leaving the household (leaving the parental home, separation…) | leaving to live with someone |
 
 ```{r}
 #| echo: false
@@ -239,13 +264,13 @@ rm(H, A)
 
 # ---- 7. Results --------------------------------------------------------------
 # Weighted rates (share of people observed in t-1 and t who moved)
-(PANEL[obs_prev & !is.na(move) & !is.na(w),
-            .(raw_sec = weighted.mean(move_sec,  w, na.rm = TRUE),
-              move    = weighted.mean(move,      w, na.rm = TRUE),
-              move_dist= weighted.mean(move_dist ,      w, na.rm = TRUE), 
-              mun     = weighted.mean(move_mun,  w, na.rm = TRUE),
-              prov    = weighted.mean(move_prov, w, na.rm = TRUE)),
-            by = year][order(year)])
+#(PANEL[obs_prev & !is.na(move) & !is.na(w),
+ #           .(#raw_sec = weighted.mean(move_sec,  w, na.rm = TRUE),
+  #            move    = weighted.mean(move,      w, na.rm = TRUE),
+   #           move_dist= weighted.mean(move_dist ,      w, na.rm = TRUE), 
+    #          mun     = weighted.mean(move_mun,  w, na.rm = TRUE),
+     #         prov    = weighted.mean(move_prov, w, na.rm = TRUE)),
+      #      by = year][order(year)])
 
 # By age 
 print(PANEL[obs_prev & !is.na(move_dist) & !is.na(w),
@@ -258,20 +283,8 @@ print(PANEL[move_dist %in% TRUE, .(n = .N, w_sum = sum(w, na.rm = TRUE)), by = t
 
 ```
 
-Some section changes do not correspond to families moving but to sections being recoded (when a very large share of households in a given section censal move to another section censal in the same municipality) =\> if over 40% of hh move from the same to the same censal section, we consider to be a recoding
-
-**raw_sec** = % of moves without taking out the recodages
-
-**move** = % of moves once the recodages taken away (seccion censal)
-
-**move_dist** = % of moves as in district level changes
-
-**mun / prov** = % of change of munipality / province
-
-| origin / dest | `same_group (no newcomers)` | `with_others (with newcomers)` |
-|----|----|----|
-| **`whole`** (entire household, including one-person households) | the household moves as it is | the household moves in with others |
-| **`part`** (part of the household leaves) | leaving the household (leaving the parental home, separation…) | leaving to live with someone |
+|     |
+|-----|
 
 ### Moves at household level
 
@@ -298,11 +311,15 @@ print(HH[!is.na(hh_w),
          by = year][order(year)])
 ```
 
+**Any_move** = at least one member of the household moves
+
 **All_move** = the entire household moves (defined as in seccion censal change)
 
 **all_dis =** the entire household moves defined as in district change (more robust)
 
 ### Comparing with INE data
+
+INE publishes aggregated data relative to residential mobility, with municipio level as the thinest spatial desagregation level.
 
 ```{r}
 #| echo: false
@@ -348,7 +365,7 @@ comp_age[order(year, match(age, age_lab))]
 ```
 
 ```{r}
- #| echo: false
+#| echo: false
 PERS <- PANEL[, .(first = min(year), has_gap = any(gap >= 1L, na.rm = TRUE)), by = IDENPER]
 share_gap_pers <- PERS[first < 2023L, mean(has_gap)]   # persons who missed >= 1 year
 mun_1y  <- PANEL[gap == 0L & !is.na(mun_p), mean(mun != mun_p)]  # 1-year interval
@@ -358,19 +375,20 @@ pct <- function(x, d = 1) paste0(format(round(100 * x, d), nsmall = d), "%")
 
 ## Key findings :
 
-- Every year, between 4 and 6% of **people** move (as in change seccion censal) every year /!\\ maybe our criterion of seccion recoding is too strict \<=\> we should consider more moves as recoding. Around 3% change district, 2% change municipality and only 0,7% change province.
+1.  Every year, between 4 and 6% of **people** move (as in change seccion censal) every year. Around 3% change district, 2% change municipality and only 0,7% change province.
 
-- Between 2 and 3% of **households** change district , around 2% change municipality and 0,7% province.
+2.  Between 2 and 3% of **households** change district , around 2% change municipality and 0,7% province.
 
-- More than 800.000 movers in total in the panel (more if we consider seccion censal level moving)
+3.  More than 800.000 movers in total in the panel (and 1.2 million if we consider seccion censal level moving)
 
-- 53% of the moves (district level) are entire households moving whilst 32% of them leave their previous household to live alone (students or separation). 8,6% of moves are people (total households) moving into another household. 4% are people leaving a previous household to integrate a new one
+4.  53% of the moves (district level) are entire households moving whilst 32% of them leave their previous household to live alone (students or separation). 8,6% of moves are people (total households) moving into another household. 4% are people leaving a previous household to integrate a new one
 
-- \~ 3,5% of people aged up to 24 yrs old have moved in the year. This rate goes up to 7% of 24-34 yrs old.
+5.  \~ 3,5% of people aged up to 24 yrs old have moved in the year. This rate goes up to 7% of 24-34 yrs old.
 
-- **Comparing with INE :** the Panel catches \~ 70% of the moves registrated by INE =\> certainly underestimated because the INE uses Padrón info whilst Panel follows people within a sample. Moreover, the most residentially mobile people are less likely to remain within the panel. For example, `r pct(share_gap_pers)` of the persons who entered the panel before 2023 are missing for at least one year before reappearing. Among those who missed one year, `r pct(mun_2y)` live in a different municipality when they reappear, against `r pct(mun_1y)` among persons observed in two consecutive years, **this gap suggests that the most mobile people are the ones the panel follows least well**.
+6.  **Comparing with INE :** the Panel catches \~ 70% of the moves registrated by INE =\> certainly underestimated because the INE uses Padrón info whilst Panel follows people within a sample. Moreover, the most residentially mobile people are less likely to remain within the panel. For example, `r pct(share_gap_pers)` of the persons who entered the panel before 2023 are missing for at least one year before reappearing. Among those who missed one year, `r pct(mun_2y)` live in a different municipality when they reappear, against `r pct(mun_1y)` among persons observed in two consecutive years, **this gap suggests that the most mobile people are the ones the panel follows least well**.
 
 ```{r}
+#| echo: false
 
 new_cols <- setdiff(names(PANEL), cols_start)
 new_cols

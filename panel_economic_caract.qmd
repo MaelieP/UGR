@@ -24,6 +24,8 @@ bkt   <- s3_bucket("mperier", endpoint_override = Sys.getenv("AWS_S3_ENDPOINT"))
 ```
 
 ```{r}
+#| echo: false
+
 
 PANEL     <- setDT(read_parquet(bkt$path("panel_hogares/panel_persons_2016_2023_sec.parquet")))
 #mod_moves <- setDT(read_parquet(bkt$path("panel_hogares/mod_moves.parquet")))
@@ -34,7 +36,16 @@ PANEL     <- setDT(read_parquet(bkt$path("panel_hogares/panel_persons_2016_2023_
 ```
 
 ```{r}
+#| echo: false
+
 library(ggplot2)
+
+wq <- function(x, w, probs) {                       # weighted quantiles
+  k <- !is.na(x) & !is.na(w); x <- x[k]; w <- w[k]
+  o <- order(x); x <- x[o]; w <- w[o]
+  cw <- cumsum(w) / sum(w)
+  sapply(probs, function(p) x[which(cw >= p)[1]])
+}
 
 # Ménages sans aucune information (eq_rbd = 0 artificiel) : exclus
 PANEL[, hh_na := all(is.na(own_rb)), by = .(year, IDENHOG)]
@@ -58,12 +69,7 @@ ggplot(qs, aes(year, val, colour = q)) +
 ```{r}
 #| echo: false
 # ---- 9. First-look tables -------------------------------------------
-wq <- function(x, w, probs) {                       # weighted quantiles
-  k <- !is.na(x) & !is.na(w); x <- x[k]; w <- w[k]
-  o <- order(x); x <- x[o]; w <- w[o]
-  cw <- cumsum(w) / sum(w)
-  sapply(probs, function(p) x[which(cw >= p)[1]])
-}
+
 
 # 9a. Mobility in relative position, not income growth. Quintile cut points
 # of equivalised disposable income are recomputed from each year's full
@@ -85,6 +91,8 @@ print(mob_wide)
 ```
 
 ```{r}
+#| echo: false
+
 AN_DIR  <- file.path("panel_hogares", "analyse")
 dir.create(AN_DIR, showWarnings = FALSE, recursive = TRUE)
  
@@ -178,6 +186,7 @@ print(D[, .(ecart_moyen_sources = round(wm(eq_rb - rowSums(.SD), w), 2)),
 ### Income distribution
 
 ```{r}
+#| echo: false
 # =====================================================================
 # 1. DISTRIBUTION TRANSVERSALE
 # =====================================================================
@@ -229,11 +238,13 @@ print(pauv_an); print(pauv_age); print(pauv_sex)
 
 ```
 
-### Sources of income 
+### Sources of income
 
 #### Distribution of source of income by decile
 
 ```{r}
+#| echo: false
+
 # Parts de chaque source dans eq_rb (en %). Dans le premier décile, eq_rb
 # est proche de 0 : les parts y sont instables et peuvent dépasser 100.
 comp <- function(by) {
@@ -253,7 +264,7 @@ print(comp_dec[year %in% c(2016, 2023)])
 ```
 
 | Variable | Source | Definition |
-|---------------------------|------------------|---------------------------|
+|----|----|----|
 | `eq_wages` | M91 | Wages, employer pension contributions, severance pay |
 | `eq_pens` | M921 + R1212 | Pensions, incl. exempt incapacity pensions |
 | `eq_ben` | M922 + M923 − R1212 | Unemployment, family, dependency and other benefits, incl. IMV |
@@ -268,6 +279,8 @@ print(comp_dec[year %in% c(2016, 2023)])
 #### Rental income
 
 ```{r}
+#| echo: false
+
 # 2b. Revenus locatifs : part des personnes dans un ménage qui en perçoit,
 # et part du total des loyers captée par le top 10 % de eq_rbd
 rent <- D[, .(pct_hh_loyer     = round(100 * wm(hh_any_rent, w), 1),
@@ -283,9 +296,11 @@ print(rent)
 
 - People in the highest decile of disposable income collect half of the total rents
 
-#### Unequal distribution of the income source 
+#### Unequal distribution of the income source
 
 ```{r}
+#| echo: false
+
 # 2c. Décomposition du Gini de eq_rb par source (Lerman-Yitzhaki) :
 # G = somme_k s_k * C_k, avec s_k la part de la source et C_k son
 # coefficient de concentration selon le rang en eq_rb.
@@ -309,7 +324,7 @@ print(gdec)
 ```
 
 |  |  |  |
-|---------------|----------------------|------------------------------------|
+|----|----|----|
 | `part` | mean(source) / mean(`eq_rb`) | Weight of the source in total income. Example: 0.60 = 60% of gross income |
 | `concentration` | `conc(source, rank in eq_rb)` | Where the source sits in the distribution. Close to 1: concentrated among the rich. Close to 0: spread evenly. Negative: concentrated among the poor |
 | `contribution` | `part × concentration` | Gini points contributed by the source. Contributions sum to the Gini |

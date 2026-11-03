@@ -1,0 +1,784 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.9.38">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+<meta name="author" content="Maëlie">
+
+<title>Panel mobilidad residencial</title>
+<style>
+/* Default styles provided by pandoc.
+** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+*/
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+</style>
+
+
+<script src="mob_resid_panel_ESP_files/libs/clipboard/clipboard.min.js"></script>
+<script src="mob_resid_panel_ESP_files/libs/quarto-html/quarto.js" type="module"></script>
+<script src="mob_resid_panel_ESP_files/libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="mob_resid_panel_ESP_files/libs/quarto-html/popper.min.js"></script>
+<script src="mob_resid_panel_ESP_files/libs/quarto-html/tippy.umd.min.js"></script>
+<script src="mob_resid_panel_ESP_files/libs/quarto-html/anchor.min.js"></script>
+<link href="mob_resid_panel_ESP_files/libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="mob_resid_panel_ESP_files/libs/quarto-html/quarto-syntax-highlighting-15634bcf2e68342d4ad2dfa704d543f6.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="mob_resid_panel_ESP_files/libs/bootstrap/bootstrap.min.js"></script>
+<link href="mob_resid_panel_ESP_files/libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="mob_resid_panel_ESP_files/libs/bootstrap/bootstrap-2e5e2c54490f6b12526ab78721810776.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+
+
+</head>
+
+<body class="fullcontent quarto-light">
+
+<div id="quarto-content" class="page-columns page-rows-contents page-layout-article">
+
+<main class="content" id="quarto-document-content">
+
+<header id="title-block-header" class="quarto-title-block default">
+<div class="quarto-title">
+<h1 class="title">Panel mobilidad residencial</h1>
+</div>
+
+
+
+<div class="quarto-title-meta">
+
+    <div>
+    <div class="quarto-title-meta-heading">Author</div>
+    <div class="quarto-title-meta-contents">
+             <p>Maëlie </p>
+          </div>
+  </div>
+    
+  
+    
+  </div>
+  
+
+
+</header>
+
+
+<p>El objetivo de este script es comprender, cuantificar y describir la movilidad residencial de las personas y los hogares del panel:</p>
+<p>En este script utilizamos varias definiciones de «mudanza», siendo la más flexible el «cambio de sección censal» entre dos años (siempre que no se trate simplemente de una recodificación de la sección). Más adelante en este script preferimos utilizar el cambio de distrito entre dos años. Preferimos los distritos porque es menos probable que cambien de un año a otro y porque resulta más fácil vincular este panel con cualquier otra base de datos si utilizamos el nivel de distrito en lugar de la sección censal (menos habitual).</p>
+<section id="mudanzas-a-nivel-de-sección-censal" class="level4">
+<h4 class="anchored" data-anchor-id="mudanzas-a-nivel-de-sección-censal"><em>Mudanzas</em> a nivel de sección censal</h4>
+<p>El problema con este nivel de desagregación es que las secciones censales cambian de un año a otro (cambios en la delimitación). Esto se puede solucionar vinculando las referencias de las secciones censales del INE (aunque resulta bastante costoso). Sin embargo, la variación de las secciones censales <strong>depende de los movimientos de población</strong>, por lo que resulta complicado estudiar dichos movimientos a ese nivel (cambios endógenos).</p>
+<p>Número y proporción de personas que se han mudado entre 2017 y 2023:</p>
+<div class="cell">
+<div class="cell-output cell-output-stdout">
+<pre><code>
+   FALSE     TRUE     &lt;NA&gt; 
+15612601  1211721  5041923 </code></pre>
+</div>
+<div class="cell-output cell-output-stdout">
+<pre><code>
+     FALSE       TRUE 
+0.92797802 0.07202198 </code></pre>
+</div>
+</div>
+<p>1211721 personas cambiaron de sección censal de un año a otro, lo que supone el 7 % de las personas del panel.</p>
+<p>si la sección censal de la persona cambió entre t−1 y t, salvo que el cambio se deba a una recodificación:</p>
+<p>consideramos que se ha producido una recodificación de la sección censal cuando dos secciones: 1) pertenecen al mismo municipio; 2) al menos el 2 % y ≥ el 40 % de los hogares de la sección de origen realizan la misma transición a la nueva sección.</p>
+<p>Los cambios de municipio siempre se contabilizan como traslados. N/A si la persona no aparece en t−1 o si falta la sección.</p>
+</section>
+<section id="mudanza-al-nivel-de-distrito" class="level4">
+<h4 class="anchored" data-anchor-id="mudanza-al-nivel-de-distrito"><em>Mudanza</em> al nivel de distrito</h4>
+<p>Si nos fijamos en la definición a nivel de distrito:</p>
+<div class="cell">
+<div class="cell-output cell-output-stdout">
+<pre><code>
+   FALSE     TRUE     &lt;NA&gt; 
+15952784   870454  5043007 </code></pre>
+</div>
+<div class="cell-output cell-output-stdout">
+<pre><code>
+     FALSE       TRUE 
+0.94825883 0.05174117 </code></pre>
+</div>
+</div>
+<p>870454 personas cambiaron de distrito de un año a otro, 5 % de los participantes en la muestra.</p>
+<p>Si no se tiene constancia de una persona en t-1, podemos considerar que se ha mudado comparando su distrito en t-2 y en t.</p>
+<div class="cell">
+<div class="cell-output cell-output-stdout">
+<pre><code>
+   FALSE     TRUE     &lt;NA&gt; 
+16074561   944893  4846791 </code></pre>
+</div>
+<div class="cell-output cell-output-stdout">
+<pre><code>
+     FALSE       TRUE 
+0.94448159 0.05551841 </code></pre>
+</div>
+<div class="cell-output cell-output-stdout">
+<pre><code>     year dist_comp move_dist_ext       N
+    &lt;int&gt;    &lt;char&gt;        &lt;lgcl&gt;   &lt;int&gt;
+ 1:  2016      &lt;NA&gt;            NA 2139105
+ 2:  2017       t-1         FALSE 1873548
+ 3:  2017       t-1          TRUE  103870
+ 4:  2017      &lt;NA&gt;            NA  363195
+ 5:  2018       t-1         FALSE 2061820
+ 6:  2018       t-1          TRUE  114522
+ 7:  2018       t-2         FALSE   11793
+ 8:  2018       t-2          TRUE    5406
+ 9:  2018      &lt;NA&gt;            NA  350007
+10:  2019       t-1         FALSE 2214952
+11:  2019       t-1          TRUE  118578
+12:  2019       t-2         FALSE   11203
+13:  2019       t-2          TRUE    7688
+14:  2019      &lt;NA&gt;            NA  357731
+15:  2020       t-1         FALSE 2375110
+16:  2020       t-1          TRUE  110498
+17:  2020       t-2         FALSE   14230
+18:  2020       t-2          TRUE    8680
+19:  2020      &lt;NA&gt;            NA  274469
+20:  2021       t-1         FALSE 2371183
+21:  2021       t-1          TRUE  130548
+22:  2021       t-2         FALSE   19177
+23:  2021       t-2          TRUE   10743
+24:  2021      &lt;NA&gt;            NA  296858
+25:  2022       t-1         FALSE 2453646
+26:  2022       t-1          TRUE  127501
+27:  2022       t-2         FALSE   22301
+28:  2022       t-2          TRUE   13160
+29:  2022      &lt;NA&gt;            NA  351043
+30:  2023       t-1         FALSE 2602525
+31:  2023       t-1          TRUE  164937
+32:  2023       t-2         FALSE   43073
+33:  2023       t-2          TRUE   28762
+34:  2023      &lt;NA&gt;            NA  714383
+     year dist_comp move_dist_ext       N
+    &lt;int&gt;    &lt;char&gt;        &lt;lgcl&gt;   &lt;int&gt;</code></pre>
+</div>
+</div>
+<p>Teniendo esto en cuenta, el número y la proporción de personas que se mudan es ligeramente superior (944893) y 5,5%</p>
+<p><code>move_dist_ext</code> = 1 si el distrito de la persona ha cambiado entre su observación anterior y el año t, admitiendo un intervalo de un año. Si se observa a la persona en t−1, es igual a <code>move_dist</code>(se supone que los distritos nunca se recodifican). Si la persona está ausente en t−1 pero se observa en t−2, se trata del cambio de distrito entre t−2 y t. Se indica «NA» si la persona no se observa en t−1 ni en t−2, o si falta el distrito. <code>dist_comp</code> indica qué comparación se utilizó («t-1» o «t-2»).</p>
+<p><strong>=&gt; Aceptar un año adicional como intervalo no aporta mucha más información y complica la interpretación a nivel anual, por lo que solemos preferir la definición estricta: «mudanza» = cambio de distrito entre t-1 y t</strong></p>
+</section>
+<section id="estadística-descriptiva" class="level3">
+<h3 class="anchored" data-anchor-id="estadística-descriptiva">Estadística descriptiva :</h3>
+<section id="proporción-de-personas-que-se-mudan-cada-año-y-tipo-de-mudanza" class="level4">
+<h4 class="anchored" data-anchor-id="proporción-de-personas-que-se-mudan-cada-año-y-tipo-de-mudanza">Proporción de personas que se mudan cada año y tipo de mudanza:</h4>
+<div class="cell">
+<div class="cell-output cell-output-stdout">
+<pre><code>[1] "Number of moves (defined as district change) in the total panel :870454"</code></pre>
+</div>
+<div class="cell-output cell-output-stdout">
+<pre><code>    year    n_t1  n_t2  move  dist dist_ext   mun  prov
+   &lt;int&gt;   &lt;int&gt; &lt;int&gt; &lt;num&gt; &lt;num&gt;    &lt;num&gt; &lt;num&gt; &lt;num&gt;
+1:  2017 1977418     0  4.26  2.93     2.93  1.83  0.67
+2:  2018 2176409 17199  4.73  3.35     3.44  2.10  0.77
+3:  2019 2333540 18891  4.63  3.32     3.44  2.14  0.79
+4:  2020 2485726 22910  4.05  2.96     3.09  1.97  0.71
+5:  2021 2501854 29920  5.01  3.57     3.70  2.34  0.85
+6:  2022 2581400 35461  5.09  3.56     3.74  2.26  0.84
+7:  2023 2767975 71835  6.11  3.85     4.07  2.19  0.82</code></pre>
+</div>
+</div>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Variable</th>
+<th>Definición</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>n_t1</td>
+<td>Número de personas observadas en t−1 y en t (observaciones usadas para las tasas anuales)</td>
+</tr>
+<tr class="even">
+<td>n_t2</td>
+<td>Número de personas adicionales ausentes en t−1 pero observadas en t−2, añadidas solo en dist_ext</td>
+</tr>
+<tr class="odd">
+<td>raw_sec</td>
+<td>% de personas cuya sección censal cambió entre t−1 y t, incluidas las recodificaciones de secciones</td>
+</tr>
+<tr class="even">
+<td>move</td>
+<td>% de personas cuya sección censal cambió entre t−1 y t, excluidas las recodificaciones: la tasa de cambio de residencia</td>
+</tr>
+<tr class="odd">
+<td>dist</td>
+<td>% de personas cuyo distrito cambió entre t−1 y t (se supone que los distritos nunca se recodifican)</td>
+</tr>
+<tr class="even">
+<td>dist_ext</td>
+<td>Igual que dist, más las personas ausentes en t−1, comparadas con t−2 (intervalo de dos años)</td>
+</tr>
+<tr class="odd">
+<td>mun</td>
+<td>% de personas cuyo municipio cambió entre t−1 y t</td>
+</tr>
+<tr class="even">
+<td>prov</td>
+<td>% de personas cuya provincia cambió entre t−1 y t</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="de-personas-que-cambian-de-residencia-según-el-tipo-de-cambio-y-la-edad" class="level4">
+<h4 class="anchored" data-anchor-id="de-personas-que-cambian-de-residencia-según-el-tipo-de-cambio-y-la-edad"><strong>% de personas que cambian de residencia según el tipo de cambio y la edad</strong></h4>
+<p>Los cambios de residencia pueden ser de hogares enteros que se mudan o de personas que salen de su hogar o se incorporan a uno nuevo:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>origin / dest</th>
+<th>same_group (sin nuevos miembros)</th>
+<th>with_others (con nuevos miembros)</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><strong>whole</strong> (hogar completo, incluidos los hogares unipersonales)</td>
+<td>el hogar se muda tal cual</td>
+<td>el hogar se muda a vivir con otras personas</td>
+</tr>
+<tr class="even">
+<td><strong>part</strong> (parte del hogar se va)</td>
+<td>salida del hogar (emancipación, separación…)</td>
+<td>salida para ir a vivir con alguien</td>
+</tr>
+</tbody>
+</table>
+<table class="caption-top table">
+<tbody>
+<tr class="odd">
+<td></td>
+</tr>
+</tbody>
+</table>
+<div class="cell">
+<div class="cell-output cell-output-stdout">
+<pre><code>      age_b  move_dist
+     &lt;fctr&gt;      &lt;num&gt;
+1:  (-1,15] 0.03961149
+2:  (15,24] 0.03503343
+3:  (24,34] 0.06982317
+4:  (34,44] 0.04699291
+5:  (44,54] 0.02812155
+6:  (54,64] 0.01966490
+7: (64,120] 0.01324345
+8:     &lt;NA&gt; 0.00000000</code></pre>
+</div>
+<div class="cell-output cell-output-stdout">
+<pre><code>                type      n      w_sum       share
+              &lt;char&gt;  &lt;int&gt;      &lt;num&gt;       &lt;num&gt;
+1:  whole_same_group 466625 5208127.95 0.530522354
+2:   part_same_group 281998 3200032.65 0.325969115
+3: whole_with_others  68389  851992.33 0.086787609
+4:  part_with_others  47591  462024.05 0.047063761
+5:              &lt;NA&gt;   5851   94804.17 0.009657161</code></pre>
+</div>
+</div>
+</section>
+</section>
+<section id="mudanza-de-hogares" class="level3">
+<h3 class="anchored" data-anchor-id="mudanza-de-hogares">Mudanza de hogares</h3>
+<div class="cell">
+<div class="cell-output cell-output-stdout">
+<pre><code>    year any_move all_move all_dis   mun  prov
+   &lt;int&gt;    &lt;num&gt;    &lt;num&gt;   &lt;num&gt; &lt;num&gt; &lt;num&gt;
+1:  2017     8.79     3.26    2.30  1.51  0.59
+2:  2018     8.68     3.90    2.87  1.88  0.72
+3:  2019     8.08     3.97    2.93  1.96  0.76
+4:  2020     6.82     3.43    2.59  1.78  0.67
+5:  2021     7.99     4.41    3.24  2.19  0.84
+6:  2022     8.23     4.41    3.20  2.09  0.80
+7:  2023     9.44     5.39    3.41  2.00  0.79</code></pre>
+</div>
+</div>
+<ul>
+<li><p><strong>Any_move</strong> = al menos un miembro del hogar cambia de residencia</p></li>
+<li><p><strong>All_move</strong> = todo el hogar cambia de residencia (definido como cambio de sección censal)</p></li>
+<li><p><strong>all_dis</strong> = todo el hogar cambia de residencia, definido como cambio de distrito (más robusto)</p></li>
+</ul>
+</section>
+<section id="comparación-con-los-datos-del-ine" class="level3">
+<h3 class="anchored" data-anchor-id="comparación-con-los-datos-del-ine"><strong>Comparación con los datos del <a href="https://www.ine.es/jaxiT3/Tabla.htm?t=69754">INE</a></strong></h3>
+<p>El INE publica datos agregados sobre movilidad residencial, y el municipio es su nivel de desagregación espacial más fino.</p>
+<div class="cell">
+<div class="cell-output cell-output-stdout">
+<pre><code>    year   mun ine_mun ratio_mun  prov ine_prov ratio_prov
+   &lt;int&gt; &lt;num&gt;   &lt;num&gt;     &lt;num&gt; &lt;num&gt;    &lt;num&gt;      &lt;num&gt;
+1:  2017  1.83      NA        NA  0.67       NA         NA
+2:  2018  2.10      NA        NA  0.77       NA         NA
+3:  2019  2.14      NA        NA  0.79       NA         NA
+4:  2020  1.97      NA        NA  0.71       NA         NA
+5:  2021  2.34    3.27      0.72  0.85     1.24       0.69
+6:  2022  2.26    3.23      0.70  0.84     1.23       0.68
+7:  2023  2.19    3.15      0.70  0.82     1.22       0.67</code></pre>
+</div>
+<div class="cell-output cell-output-stdout">
+<pre><code>     year             age ine_mun ine_prov   mun  prov  move ratio_mun
+    &lt;int&gt;          &lt;char&gt;   &lt;num&gt;    &lt;num&gt; &lt;num&gt; &lt;num&gt; &lt;num&gt;     &lt;num&gt;
+ 1:  2021  De 0 a 15 años    3.26     1.03  2.62  0.79  6.60      0.81
+ 2:  2021 De 16 a 24 años    3.94     1.61  2.33  0.84  5.01      0.59
+ 3:  2021 De 25 a 34 años    7.09     2.96  4.88  1.97  9.92      0.69
+ 4:  2021 De 35 a 44 años    4.38     1.62  3.38  1.17  7.26      0.77
+ 5:  2021 De 45 a 54 años    2.60     0.93  1.97  0.63  4.27      0.76
+ 6:  2021 De 55 a 64 años    1.82     0.71  1.42  0.54  2.87      0.78
+ 7:  2021   65 y más años    1.46     0.60  1.02  0.48  1.82      0.70
+ 8:  2022  De 0 a 15 años    3.03     0.95  2.34  0.76  6.36      0.77
+ 9:  2022 De 16 a 24 años    4.15     1.76  2.37  0.89  5.30      0.57
+10:  2022 De 25 a 34 años    7.42     3.17  5.18  2.25 10.36      0.70
+11:  2022 De 35 a 44 años    4.18     1.53  3.16  1.13  7.29      0.75
+12:  2022 De 45 a 54 años    2.53     0.87  1.88  0.62  4.41      0.74
+13:  2022 De 55 a 64 años    1.80     0.67  1.35  0.47  3.00      0.75
+14:  2022   65 y más años    1.48     0.58  1.00  0.40  1.95      0.68
+15:  2023  De 0 a 15 años    2.92     0.94  2.33  0.75  7.38      0.80
+16:  2023 De 16 a 24 años    4.04     1.71  2.33  0.90  6.47      0.58
+17:  2023 De 25 a 34 años    7.00     3.04  4.86  2.02 10.94      0.69
+18:  2023 De 35 a 44 años    4.23     1.59  3.15  1.14  8.21      0.75
+19:  2023 De 45 a 54 años    2.55     0.90  1.85  0.63  5.65      0.72
+20:  2023 De 55 a 64 años    1.79     0.67  1.30  0.48  4.16      0.73
+21:  2023   65 y más años    1.44     0.56  0.98  0.42  3.06      0.68
+     year             age ine_mun ine_prov   mun  prov  move ratio_mun
+    &lt;int&gt;          &lt;char&gt;   &lt;num&gt;    &lt;num&gt; &lt;num&gt; &lt;num&gt; &lt;num&gt;     &lt;num&gt;</code></pre>
+</div>
+</div>
+</section>
+<section id="principales-resultados" class="level2">
+<h2 class="anchored" data-anchor-id="principales-resultados"><strong>Principales resultados:</strong></h2>
+<ol type="1">
+<li><p>Cada año, entre el 4 y el 6 % de las personas cambia de residencia (definido como cambio de sección censal). Alrededor del 3 % cambia de distrito, el 2 % de municipio y solo el 0,7 % de provincia.</p></li>
+<li><p>Entre el 2 y el 3 % de los hogares cambia de distrito, alrededor del 2 % de municipio y el 0,7 % de provincia.</p></li>
+<li><p>Más de 800.000 personas cambian de residencia en total en el panel (1,2 millones si se considera el cambio de sección censal).</p></li>
+<li><p>El 53 % de los cambios de residencia (a nivel de distrito) corresponde a hogares enteros que se mudan, mientras que el 32 % corresponde a personas que dejan su hogar anterior para vivir solas (estudiantes o separaciones). El 8,6 % son personas (hogares completos) que se incorporan a otro hogar y el 4 % son personas que dejan un hogar anterior para integrarse en uno nuevo.</p></li>
+<li><p>Alrededor del 3,5 % de las personas de hasta 24 años ha cambiado de residencia en el año. Esta tasa sube al 7 % entre las personas de 24 a 34 años.</p></li>
+<li><p>Comparación con el INE: el Panel recoge alrededor del 70 % de los cambios de residencia registrados por el INE, lo que indica una probable subestimación, ya que el INE utiliza la información del Padrón mientras que el Panel sigue a personas dentro de una muestra. Además, las personas con mayor movilidad residencial tienen menos probabilidades de permanecer en el panel. Por ejemplo, el 9.6% de las personas que entraron en el panel antes de 2023 está ausente al menos un año antes de reaparecer. Entre las que faltaron un año, el 24.2% vive en otro municipio cuando reaparece, frente al 3.2% entre las personas observadas dos años consecutivos. Esta diferencia sugiere que las personas más móviles son las que el panel sigue peor.</p></li>
+</ol>
+</section>
+
+</main>
+<!-- /main column -->
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp('/' + window.location.host + '/');
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        // Attach click handler to the DT
+        const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+        for (const annoteDlNode of annoteDls) {
+          annoteDlNode.addEventListener('click', (event) => {
+            const clickedEl = event.target;
+            if (clickedEl !== selectedAnnoteEl) {
+              unselectCodeLines();
+              const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+              if (activeEl) {
+                activeEl.classList.remove('code-annotation-active');
+              }
+              selectCodeLines(clickedEl);
+              clickedEl.classList.add('code-annotation-active');
+            } else {
+              // Unselect the line
+              unselectCodeLines();
+              clickedEl.classList.remove('code-annotation-active');
+            }
+          });
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+</div> <!-- /content -->
+
+
+
+
+</body></html>

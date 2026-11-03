@@ -15,3 +15,4 @@
 *.CPG
 /.quarto/
 **/*.quarto_ipynb
+mob_resid_panel_ESP_files
