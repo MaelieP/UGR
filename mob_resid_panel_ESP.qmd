@@ -1,7 +1,9 @@
 ---
 title: "Panel mobilidad residencial"
 author: "Maëlie"
-format: html
+format:
+     html:
+       embed-resources: true
 editor: visual
 ---
 
