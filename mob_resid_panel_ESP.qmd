@@ -4,7 +4,7 @@ author: "Maëlie"
 format:
      html:
        embed-resources: true
-editor: visual
+%>% editor: visual
 ---
 
 ```{r}
@@ -289,7 +289,7 @@ print(PANEL[move_dist %in% TRUE, .(n = .N, w_sum = sum(w, na.rm = TRUE)), by = t
 
 ```
 
-### Mudanza de hogares 
+### Mudanza de hogares
 
 ```{r}
 #| echo: false
@@ -320,7 +320,7 @@ print(HH[!is.na(hh_w),
 
 - **all_dis** = todo el hogar cambia de residencia, definido como cambio de distrito (más robusto)
 
-### **Comparación con los datos del [INE](https://www.ine.es/jaxiT3/Tabla.htm?t=69754)** 
+### **Comparación con los datos del [INE](https://www.ine.es/jaxiT3/Tabla.htm?t=69754)**
 
 El INE publica datos agregados sobre movilidad residencial, y el municipio es su nivel de desagregación espacial más fino.
 
