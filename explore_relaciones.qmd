@@ -10,13 +10,16 @@ editor: visual
 This script explores the information available in the *relationships* file and the *herencia* files.
 
 ```{r}
+#| echo: false 
 library(data.table)
 library(arrow)
 ```
 
 ```{r load panel}
+#| echo: false
+b <- s3_bucket("mperier", endpoint_override = Sys.getenv("AWS_S3_ENDPOINT"))
 
-PANEL <- setDT(read_parquet(bkt$path("panel_hogares/panel_persons_2016_2023_sec.parquet")))
+PANEL <- setDT(read_parquet(b$path("panel_hogares/panel_persons_2016_2023_sec.parquet")))
 cols_start <- names(PANEL)
 stopifnot(PANEL[!is.na(SECCION), all(nchar(SECCION) == 10L)])
 PANEL[, DISTRITO := substr(SECCION, 1, 7)]
@@ -31,7 +34,6 @@ P23[, `:=`(IDENPER = as.character(IDENPER), IDENHOG = as.character(IDENHOG))]
 ```{r ---- 0. Paramètres ----}
 #| echo: false
 
-b <- s3_bucket("mperier", endpoint_override = Sys.getenv("AWS_S3_ENDPOINT"))
 
 RAR_KEY   <- "P HOGARES 2023.rar"            # <- clé du .rar dans le bucket
 PQ_DIR    <- "panel_hogares/relations"              # Parquet extraits (bucket)
@@ -114,6 +116,8 @@ if (length(a_extraire)) {
 #  - largeur fixe      -> sep = NULL et largeurs = c(11, 2, 11) par ex.
 decoupe <- function(dt, noms, sep = NULL, largeurs = NULL) {
   x <- dt$ligne
+  #bad <- !validUTF8(x)
+  #if (any(bad)) x[bad] <- iconv(x[bad], "latin1", "UTF-8")
   if (!is.null(sep)) {
     p <- tstrsplit(x, sep, fixed = TRUE)
   } else {
@@ -199,6 +203,31 @@ tab_menage[n_relaciones < MIN_N, (names(tab_menage)[-1]) := NA]
 print(tab_menage)
 sauve(tab_menage, "rel2023_menage_detail")
 
+
+```
+
+```{r depart age}
+#| echo: false
+# 1) Liens enfant -> parent, union de toutes les vagues
+asc <- unique(rbindlist(lapply(vagues, function(v)
+  decoupe(lire_pq(v), REL_NOMS, REL_SEP, REL_LARG)[RELACION == "Ascendiente",
+                                                   .(hijo = IDENPER, padre = IDENPER_REL)])))
+# Pour chaque personne x année : vit-elle avec au moins un parent ?
+py <- PANEL[, .(id = as.character(IDENPER), year, hog = as.character(IDENHOG), age, sex, w)]
+cohab <- merge(asc, py[, .(hijo = id, year, hog_h = hog)], by = "hijo")
+cohab <- merge(cohab, py[, .(padre = id, year, hog_p = hog)], by = c("padre", "year"))
+ids_avec_parent <- unique(cohab[hog_h == hog_p, .(id = hijo, year)])
+py[, vive_con_padres := FALSE][ids_avec_parent, on = .(id, year), vive_con_padres := TRUE]
+
+# Part vivant avec ses parents, par âge (une seule année, ex. 2023)
+tab <- py[year == 2023 & age %between% c(16, 45) & !is.na(w),
+          .(n = .N, pct_con_padres = round(100 * weighted.mean(vive_con_padres, w), 1)), by = age][order(age)]
+print(tab)
+cat("Primera edad < 50 % con padres:", tab[pct_con_padres < 50, min(age)], "\n")
+```
+
+```{r}
+#| echo: false 
 # Cohabitation parent-enfant selon l'âge de l'enfant (tranches de 5 ans)
 cohab_age <- rp[RELACION == "Ascendiente" & !is.na(age),            # ego = enfant, alter = parent
                 .(n = .N, pct_cohab = round(100 * mean(meme_menage), 1)),
@@ -211,12 +240,12 @@ cat("Part panel 2023 avec >=1 relation dans le panel :",
     round(100 * mean(p23$IDENPER %chin% rp$IDENPER), 1), "%\n")
 rm(ego, alt); gc()
 
-vagues <- grep("^Relaciones", names(FICHIERS), value = TRUE)
-evol <- rbindlist(lapply(vagues, function(v)
-  decoupe(lire_pq(v), REL_NOMS, REL_SEP, REL_LARG)[, .N, by = RELACION][, fichier := v]))
-evol[N < MIN_N, N := NA]
-sauve(dcast(evol, RELACION ~ fichier, value.var = "N"), "rel_codes_par_vague")
-rm(rel, inv, sym); gc()
+#vagues <- grep("^Relaciones", names(FICHIERS), value = TRUE)
+#evol <- rbindlist(lapply(vagues, function(v)
+#  decoupe(lire_pq(v), REL_NOMS, REL_SEP, REL_LARG)[, .N, by = RELACION][, fichier := v]))
+#evol[N < MIN_N, N := NA]
+#sauve(dcast(evol, RELACION ~ fichier, value.var = "N"), "rel_codes_par_vague")
+#rm(rel, inv, sym); gc()
 
 
 ```
@@ -225,7 +254,7 @@ rm(rel, inv, sym); gc()
 
 ```{r 5. HEREDEROS and CAUSANTES}
 #| echo: false
-
+#| eval: false
 her <- decoupe(lire_pq("Herederos"), HER_NOMS, HER_SEP, HER_LARG)
 
 cat("Lignes :", nrow(her), "| héritiers distincts :", uniqueN(her$IDEN_SP),
