@@ -1,0 +1,264 @@
+---
+title: "explore relaciones"
+author: "Maëlie"
+format: html
+editor: visual
+---
+
+## Goal
+
+This script explores the information available in the *relationships* file and the *herencia* files.
+
+```{r}
+library(data.table)
+library(arrow)
+```
+
+```{r load panel}
+
+PANEL <- setDT(read_parquet(bkt$path("panel_hogares/panel_persons_2016_2023_sec.parquet")))
+cols_start <- names(PANEL)
+stopifnot(PANEL[!is.na(SECCION), all(nchar(SECCION) == 10L)])
+PANEL[, DISTRITO := substr(SECCION, 1, 7)]
+PANEL[, obs_prev := obs_prev %in% TRUE]
+PANEL[, mun := paste0(CPRO, CMUN)]
+setorder(PANEL, IDENPER, year)
+
+P23 <- PANEL[year == 2023]
+P23[, `:=`(IDENPER = as.character(IDENPER), IDENHOG = as.character(IDENHOG))]
+```
+
+```{r ---- 0. Paramètres ----}
+#| echo: false
+
+b <- s3_bucket("mperier", endpoint_override = Sys.getenv("AWS_S3_ENDPOINT"))
+
+RAR_KEY   <- "P HOGARES 2023.rar"            # <- clé du .rar dans le bucket
+PQ_DIR    <- "panel_hogares/relations"              # Parquet extraits (bucket)
+OUT_DIR   <- "~/work/explo_relations"               # CSV agrégés (local, petits)
+dir.create(OUT_DIR, recursive = TRUE, showWarnings = FALSE)
+PANEL_KEY <- "panel_hogares/panel_persons_2016_2023"
+MIN_N     <- 10
+
+
+```
+
+```{r 1. Outils bucket}
+#| echo: false
+
+existe <- function(key) b$GetFileInfo(key)[[1]]$type != 0L   # 0 = NotFound
+lire_pq <- function(nom) as.data.table(read_parquet(b$path(file.path(PQ_DIR, paste0(nom, ".parquet")))))
+sauve   <- function(t, nom) fwrite(t, file.path(OUT_DIR, paste0(nom, ".csv")))
+
+freq <- function(dt, by) {
+  t <- dt[, .N, by = by][order(-N)]
+  t[, pct := round(100 * N / sum(N), 2)]
+  t[N < MIN_N, `:=`(N = NA_integer_, pct = NA_real_)]
+  t[]
+}
+
+
+```
+
+```{r 2. EXTRACTION }
+#| echo: false
+
+# ---- 2. EXTRACTION (une seule fois) : .rar du bucket -> Parquet dans le bucket
+# unrar exige un fichier local : copie temporaire, supprimée à la fin du bloc.
+FICHIERS <- c(Relaciones_2016_2019 = "Relaciones_2016_2019\\.txt",
+              Relaciones_2020      = "Relaciones_2020\\.txt",
+              Relaciones_2021      = "Relaciones_2021\\.txt",
+              Relaciones_2022      = "Relaciones_2022\\.txt",
+              Relaciones_2023      = "Relaciones_2023\\.txt",
+              Herederos            = "Herederos\\.txt",
+              Causantes            = "Causantes\\.txt")
+
+a_extraire <- names(FICHIERS)[!vapply(file.path(PQ_DIR, paste0(names(FICHIERS), ".parquet")), existe, TRUE)]
+
+if (length(a_extraire)) {
+  stopifnot(nzchar(Sys.which("unrar")))               # sinon : sudo apt-get install -y unrar
+  tmp_rar <- file.path(tempdir(), "ph.rar")
+  message("Copie temporaire du .rar (~13 Go)...")
+  ins <- b$OpenInputStream(RAR_KEY); outs <- FileOutputStream$create(tmp_rar)
+  repeat { buf <- ins$Read(64 * 1024^2); if (buf$size == 0) break; outs$write(buf) }
+  ins$close(); outs$close()
+  
+  membres <- system2("unrar", c("lb", shQuote(tmp_rar)), stdout = TRUE)
+  flux    <- function(m) sprintf("unrar p -inul %s %s", shQuote(tmp_rar), shQuote(m))
+  
+  for (nom in a_extraire) {
+    m <- grep(FICHIERS[[nom]], membres, value = TRUE)
+    if (length(m) != 1) { warning(nom, " : ", length(m), " membres trouvés"); next }
+    # Aperçu sans identifiants (chiffres -> 9)
+    cat("\n==", nom, "==\n")
+    ap <- iconv(system(paste(flux(m), "| head -n 3"), intern = TRUE), "latin1", "UTF-8")
+    cat(gsub("[0-9]", "9", ap), sep = "\n")
+    # Lignes brutes, en texte : le découpage se fait au bloc 3
+    dt <- fread(cmd = flux(m), sep = "\n", header = FALSE, col.names = "ligne",
+                colClasses = "character", strip.white = FALSE)
+    dt[, ligne := iconv(ligne, "latin1", "UTF-8")]          # fichiers en Latin-1
+    write_parquet(dt, b$path(file.path(PQ_DIR, paste0(nom, ".parquet"))), compression = "zstd")
+    message(nom, " : ", nrow(dt), " lignes -> bucket")
+  }
+  unlink(tmp_rar)
+}
+
+
+```
+
+```{r 3. Découpage des lignes brutes}
+#| echo: false
+
+# Regarder l'aperçu imprimé au bloc 2, puis :
+#  - fichier délimité  -> sep = ";" (ou "|", ",", "\t") et largeurs = NULL
+#  - largeur fixe      -> sep = NULL et largeurs = c(11, 2, 11) par ex.
+decoupe <- function(dt, noms, sep = NULL, largeurs = NULL) {
+  x <- dt$ligne
+  if (!is.null(sep)) {
+    p <- tstrsplit(x, sep, fixed = TRUE)
+  } else {
+    stopifnot(!is.null(largeurs))
+    fin <- cumsum(largeurs); deb <- fin - largeurs + 1
+    p <- lapply(seq_along(largeurs), function(i) substr(x, deb[i], fin[i]))
+  }
+  out <- as.data.table(lapply(p, trimws))
+  if (ncol(out) == length(noms)) setnames(out, noms) else
+    warning(ncol(out), " colonnes, ", length(noms), " noms attendus")
+  for (j in names(out)) set(out, which(out[[j]] %in% c("", ".")), j, NA_character_)
+  out[]
+}
+
+REL_NOMS <- c("IDENPER", "RELACION", "IDENPER_REL")
+REL_SEP  <- ";"; REL_LARG <- NULL                     # <- à remplir après l'aperçu
+HER_NOMS <- c("IDEN_SP", "IDEN_CAUS", "MODELO", "EJERCICIO", "ANNO_BAJA", "GRUPO_PAR")
+HER_SEP  <- NULL; HER_LARG <- NULL                     # <- idem (Causantes : même design)
+
+
+```
+
+### Relaciones
+
+```{r 4. RELACIONES}
+#| echo: false
+
+rel <- decoupe(lire_pq("Relaciones_2023"), REL_NOMS, REL_SEP, REL_LARG)
+
+cat("Lignes :", nrow(rel), "| personnes distinctes :", uniqueN(rel$IDENPER), "\n")
+sauve(freq(rel, "RELACION"), "rel2023_codes")
+
+nrel <- rel[, .N, by = IDENPER][, .(n_personnes = .N), by = .(n_rel = pmin(N, 10L))][order(n_rel)]
+nrel[n_personnes < MIN_N, n_personnes := NA]
+#sauve(nrel, "rel2023_n_par_personne")
+
+#inv <- rel[, .(IDENPER = IDENPER_REL, IDENPER_REL = IDENPER, RELACION_INV = RELACION)]
+#sym <- merge(rel, inv, by = c("IDENPER", "IDENPER_REL"), all.x = TRUE)
+#sauve(freq(sym, c("RELACION", "RELACION_INV")), "rel2023_symetrie")
+
+# Panel 2023 lu depuis le bucket (Parquet partitionné par year)
+p23 <- P23|>
+  dplyr::select(IDENPER, IDENHOG, age, sex, CPRO, n_members, is_ref, own_rb, w) |>
+  dplyr::collect() |> as.data.table() |> unique(by = "IDENPER")
+# (si PANEL est déjà en mémoire : p23 <- PANEL[year == 2023, .(IDENPER, IDENHOG, age, sex, CPRO, n_members, is_ref, own_rb, w)])
+p23[, `:=`(IDENPER = as.character(IDENPER), IDENHOG = as.character(IDENHOG))]
+
+# Paires dont les deux personnes sont dans le panel 2023, avec les infos des deux côtés
+ego  <- p23[, .(IDENPER, hog = IDENHOG, age, sex, prov = CPRO, n_members, is_ref, rb = own_rb, w)]
+alt  <- p23[, .(IDENPER_REL = IDENPER, hog_r = IDENHOG, age_r = age, prov_r = CPRO, rb_r = own_rb)]
+rp   <- merge(merge(rel, ego, by = "IDENPER"), alt, by = "IDENPER_REL")
+
+rp[, `:=`(meme_menage = hog == hog_r,
+          meme_prov   = prov == prov_r,
+          ecart_age   = abs(age - age_r))]
+
+rp[, `:=`(convivio_alguna_vez = FALSE, convivio_antes_2023 = FALSE, anos_juntos_obs = 0L)]
+for (y in 2016:2023) {
+  hy <- PANEL[year == y, .(IDENPER = as.character(IDENPER), IDENHOG = as.character(IDENHOG))]
+  h1 <- hy$IDENHOG[match(rp$IDENPER,     hy$IDENPER)]
+  h2 <- hy$IDENHOG[match(rp$IDENPER_REL, hy$IDENPER)]
+  ambos <- !is.na(h1) & !is.na(h2)
+  junto <- ambos & h1 == h2
+  rp[, anos_juntos_obs := anos_juntos_obs + ambos]
+  rp[junto, convivio_alguna_vez := TRUE]
+  if (y < 2023) rp[junto, convivio_antes_2023 := TRUE]
+}
+rm(hy, h1, h2, ambos, junto)
+
+
+tab_menage <- rp[, .(
+  n_relaciones                = .N,
+  pct_conviven_2023           = round(100 * mean(meme_menage), 1),
+  pct_convivieron_alguna_vez  = round(100 * mean(convivio_alguna_vez), 1),   # 2016-2023
+#  pct_convivieron_antes_2023  = round(100 * mean(convivio_antes_2023), 1),   # 2016-2022
+#  pct_ex_convivientes         = round(100 * mean(convivio_antes_2023 & !meme_menage), 1),
+  media_anos_observados_ambos = round(mean(anos_juntos_obs), 1)
+), by = RELACION]
+tab_menage[, pct_del_total := round(100 * n_relaciones / sum(n_relaciones), 2)]
+setcolorder(tab_menage, c("RELACION", "n_relaciones", "pct_del_total"))
+setorder(tab_menage, -n_relaciones)
+tab_menage[n_relaciones < MIN_N, (names(tab_menage)[-1]) := NA]
+print(tab_menage)
+sauve(tab_menage, "rel2023_menage_detail")
+
+# Cohabitation parent-enfant selon l'âge de l'enfant (tranches de 5 ans)
+cohab_age <- rp[RELACION == "Ascendiente" & !is.na(age),            # ego = enfant, alter = parent
+                .(n = .N, pct_cohab = round(100 * mean(meme_menage), 1)),
+                by = .(age_enfant = pmin(5L * (as.integer(age) %/% 5L), 70L))][order(age_enfant)]
+cohab_age[n < MIN_N, pct_cohab := NA]
+print(cohab_age)
+sauve(cohab_age, "rel2023_cohab_parent_par_age")
+
+cat("Part panel 2023 avec >=1 relation dans le panel :",
+    round(100 * mean(p23$IDENPER %chin% rp$IDENPER), 1), "%\n")
+rm(ego, alt); gc()
+
+vagues <- grep("^Relaciones", names(FICHIERS), value = TRUE)
+evol <- rbindlist(lapply(vagues, function(v)
+  decoupe(lire_pq(v), REL_NOMS, REL_SEP, REL_LARG)[, .N, by = RELACION][, fichier := v]))
+evol[N < MIN_N, N := NA]
+sauve(dcast(evol, RELACION ~ fichier, value.var = "N"), "rel_codes_par_vague")
+rm(rel, inv, sym); gc()
+
+
+```
+
+### Herederos
+
+```{r 5. HEREDEROS and CAUSANTES}
+#| echo: false
+
+her <- decoupe(lire_pq("Herederos"), HER_NOMS, HER_SEP, HER_LARG)
+
+cat("Lignes :", nrow(her), "| héritiers distincts :", uniqueN(her$IDEN_SP),
+    "| causants distincts :", uniqueN(her$IDEN_CAUS, na.rm = TRUE), "\n")
+sauve(freq(her, "MODELO"),                 "her_modele")
+sauve(freq(her, c("EJERCICIO", "MODELO")), "her_annee_modele")
+sauve(freq(her, "GRUPO_PAR"),              "her_parente")
+sauve(freq(her[, .(MODELO, caus_dans_panel = !is.na(IDEN_CAUS))],
+           c("MODELO", "caus_dans_panel")), "her_causant_dans_panel")
+
+nh <- her[!is.na(IDEN_CAUS), .N, by = .(IDEN_CAUS, MODELO)][
+  , .(n_causants = .N), by = .(MODELO, n_heritiers = pmin(N, 10L))][order(MODELO, n_heritiers)]
+nh[n_causants < MIN_N, n_causants := NA]
+sauve(nh, "her_n_heritiers_par_causant")
+
+# Revenu des héritiers l'année de l'héritage vs année précédente (panel du bucket)
+pan <- open_dataset(b$path(PANEL_KEY)) |>
+  dplyr::select(IDENPER, year, own_rb, rb_prev, w) |>
+  dplyr::collect() |> as.data.table()
+pan[, `:=`(IDEN_SP = as.character(IDENPER), EJERCICIO = as.character(year))]
+hp <- merge(unique(her[, .(IDEN_SP, EJERCICIO, MODELO)]), pan, by = c("IDEN_SP", "EJERCICIO"))
+res <- hp[, .(n = .N,
+              rb_moy      = weighted.mean(own_rb,  w, na.rm = TRUE),
+              rb_prev_moy = weighted.mean(rb_prev, w, na.rm = TRUE)), by = .(EJERCICIO, MODELO)]
+res[n < MIN_N, c("rb_moy", "rb_prev_moy") := NA]
+sauve(res[order(EJERCICIO, MODELO)], "her_revenu_heritiers")
+rm(pan, hp); gc()
+
+cau <- decoupe(lire_pq("Causantes"), HER_NOMS, HER_SEP, HER_LARG)
+sauve(freq(cau, c("EJERCICIO", "MODELO")), "caus_annee_modele")
+sauve(freq(cau[, .(sp_dans_panel = !is.na(IDEN_SP))], "sp_dans_panel"), "caus_sp_dans_panel")
+
+cat("Fini. Bases dans le bucket :", PQ_DIR, "| agrégats en local :", OUT_DIR, "\n")
+```
+
+The `echo: false` option disables the printing of code (only output is displayed).
