@@ -135,7 +135,7 @@ decoupe <- function(dt, noms, sep = NULL, largeurs = NULL) {
 REL_NOMS <- c("IDENPER", "RELACION", "IDENPER_REL")
 REL_SEP  <- ";"; REL_LARG <- NULL                     # <- à remplir après l'aperçu
 HER_NOMS <- c("IDEN_SP", "IDEN_CAUS", "MODELO", "EJERCICIO", "ANNO_BAJA", "GRUPO_PAR")
-HER_SEP  <- NULL; HER_LARG <- NULL                     # <- idem (Causantes : même design)
+HER_SEP  <- ";"; HER_LARG <- NULL                     # <- idem (Causantes : même design)
 
 
 ```
@@ -209,6 +209,7 @@ sauve(tab_menage, "rel2023_menage_detail")
 ```{r depart age}
 #| echo: false
 # 1) Liens enfant -> parent, union de toutes les vagues
+vagues <- grep("^Relaciones", names(FICHIERS), value = TRUE)
 asc <- unique(rbindlist(lapply(vagues, function(v)
   decoupe(lire_pq(v), REL_NOMS, REL_SEP, REL_LARG)[RELACION == "Ascendiente",
                                                    .(hijo = IDENPER, padre = IDENPER_REL)])))
@@ -228,17 +229,18 @@ cat("Primera edad < 50 % con padres:", tab[pct_con_padres < 50, min(age)], "\n")
 
 ```{r}
 #| echo: false 
+#| eval: false
 # Cohabitation parent-enfant selon l'âge de l'enfant (tranches de 5 ans)
-cohab_age <- rp[RELACION == "Ascendiente" & !is.na(age),            # ego = enfant, alter = parent
-                .(n = .N, pct_cohab = round(100 * mean(meme_menage), 1)),
-                by = .(age_enfant = pmin(5L * (as.integer(age) %/% 5L), 70L))][order(age_enfant)]
-cohab_age[n < MIN_N, pct_cohab := NA]
-print(cohab_age)
-sauve(cohab_age, "rel2023_cohab_parent_par_age")
+#cohab_age <- rp[RELACION == "Ascendiente" & !is.na(age),            # ego = enfant, alter = parent
+ #               .(n = .N, pct_cohab = round(100 * mean(meme_menage), 1)),
+  #              by = .(age_enfant = pmin(5L * (as.integer(age) %/% 5L), 70L))][order(age_enfant)]
+#cohab_age[n < MIN_N, pct_cohab := NA]
+#print(cohab_age)
+#sauve(cohab_age, "rel2023_cohab_parent_par_age")
 
-cat("Part panel 2023 avec >=1 relation dans le panel :",
-    round(100 * mean(p23$IDENPER %chin% rp$IDENPER), 1), "%\n")
-rm(ego, alt); gc()
+#cat("Part panel 2023 avec >=1 relation dans le panel :",
+ #   round(100 * mean(p23$IDENPER %chin% rp$IDENPER), 1), "%\n")
+#rm(ego, alt); gc()
 
 #vagues <- grep("^Relaciones", names(FICHIERS), value = TRUE)
 #evol <- rbindlist(lapply(vagues, function(v)
@@ -259,27 +261,30 @@ her <- decoupe(lire_pq("Herederos"), HER_NOMS, HER_SEP, HER_LARG)
 
 cat("Lignes :", nrow(her), "| héritiers distincts :", uniqueN(her$IDEN_SP),
     "| causants distincts :", uniqueN(her$IDEN_CAUS, na.rm = TRUE), "\n")
-sauve(freq(her, "MODELO"),                 "her_modele")
-sauve(freq(her, c("EJERCICIO", "MODELO")), "her_annee_modele")
+freq(her, "MODELO")
+freq(her, c("EJERCICIO", "MODELO"))
+freq(her, "GRUPO_PAR")
 sauve(freq(her, "GRUPO_PAR"),              "her_parente")
-sauve(freq(her[, .(MODELO, caus_dans_panel = !is.na(IDEN_CAUS))],
-           c("MODELO", "caus_dans_panel")), "her_causant_dans_panel")
+sauve(freq(her[, .(MODELO, causante_en_panel = !is.na(IDEN_CAUS))],
+           c("MODELO", "causante_en_panel")), "her_causant_dans_panel")
 
 nh <- her[!is.na(IDEN_CAUS), .N, by = .(IDEN_CAUS, MODELO)][
   , .(n_causants = .N), by = .(MODELO, n_heritiers = pmin(N, 10L))][order(MODELO, n_heritiers)]
 nh[n_causants < MIN_N, n_causants := NA]
+print(nh)
 sauve(nh, "her_n_heritiers_par_causant")
 
 # Revenu des héritiers l'année de l'héritage vs année précédente (panel du bucket)
-pan <- open_dataset(b$path(PANEL_KEY)) |>
-  dplyr::select(IDENPER, year, own_rb, rb_prev, w) |>
+pan <- PANEL |>
+  dplyr::select(IDENPER, year, own_rb, eq_rbd, w) |> filter(!is.na(w)) %>%
   dplyr::collect() |> as.data.table()
 pan[, `:=`(IDEN_SP = as.character(IDENPER), EJERCICIO = as.character(year))]
 hp <- merge(unique(her[, .(IDEN_SP, EJERCICIO, MODELO)]), pan, by = c("IDEN_SP", "EJERCICIO"))
 res <- hp[, .(n = .N,
               rb_moy      = weighted.mean(own_rb,  w, na.rm = TRUE),
-              rb_prev_moy = weighted.mean(rb_prev, w, na.rm = TRUE)), by = .(EJERCICIO, MODELO)]
-res[n < MIN_N, c("rb_moy", "rb_prev_moy") := NA]
+              eq_rbd_moy = weighted.mean(eq_rbd, w, na.rm = TRUE)), by = .(EJERCICIO, MODELO)]
+res[n < MIN_N, c("rb_moy", "eq_rbd_moy") := NA]
+print(res)
 sauve(res[order(EJERCICIO, MODELO)], "her_revenu_heritiers")
 rm(pan, hp); gc()
 
