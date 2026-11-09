@@ -1,7 +1,9 @@
 ---
 title: "explore relaciones"
 author: "Maëlie"
-format: html
+format:
+     html:
+       embed-resources: true
 editor: visual
 ---
 
@@ -11,12 +13,16 @@ This script explores the information available in the *relationships* file and t
 
 ```{r}
 #| echo: false 
+#| output: false
 library(data.table)
 library(arrow)
+library(ggplot2)
+library(gt)
 ```
 
 ```{r load panel}
 #| echo: false
+#| output: false
 b <- s3_bucket("mperier", endpoint_override = Sys.getenv("AWS_S3_ENDPOINT"))
 
 PANEL <- setDT(read_parquet(b$path("panel_hogares/panel_persons_2016_2023_sec.parquet")))
@@ -33,6 +39,7 @@ P23[, `:=`(IDENPER = as.character(IDENPER), IDENHOG = as.character(IDENHOG))]
 
 ```{r ---- 0. Paramètres ----}
 #| echo: false
+#| output: false 
 
 
 RAR_KEY   <- "P HOGARES 2023.rar"            # <- clé du .rar dans le bucket
@@ -47,6 +54,7 @@ MIN_N     <- 10
 
 ```{r 1. Outils bucket}
 #| echo: false
+#| output: false
 
 existe <- function(key) b$GetFileInfo(key)[[1]]$type != 0L   # 0 = NotFound
 lire_pq <- function(nom) as.data.table(read_parquet(b$path(file.path(PQ_DIR, paste0(nom, ".parquet")))))
@@ -64,6 +72,7 @@ freq <- function(dt, by) {
 
 ```{r 2. EXTRACTION }
 #| echo: false
+#| output: false
 
 # ---- 2. EXTRACTION (une seule fois) : .rar du bucket -> Parquet dans le bucket
 # unrar exige un fichier local : copie temporaire, supprimée à la fin du bloc.
@@ -110,14 +119,15 @@ if (length(a_extraire)) {
 
 ```{r 3. Découpage des lignes brutes}
 #| echo: false
+#| output: false
 
 # Regarder l'aperçu imprimé au bloc 2, puis :
 #  - fichier délimité  -> sep = ";" (ou "|", ",", "\t") et largeurs = NULL
 #  - largeur fixe      -> sep = NULL et largeurs = c(11, 2, 11) par ex.
 decoupe <- function(dt, noms, sep = NULL, largeurs = NULL) {
   x <- dt$ligne
-  #bad <- !validUTF8(x)
-  #if (any(bad)) x[bad] <- iconv(x[bad], "latin1", "UTF-8")
+  bad <- !validUTF8(x)                                   # lignes restées en Latin-1
+  if (any(bad)) x[bad] <- iconv(x[bad], "latin1", "UTF-8")
   if (!is.null(sep)) {
     p <- tstrsplit(x, sep, fixed = TRUE)
   } else {
@@ -132,6 +142,7 @@ decoupe <- function(dt, noms, sep = NULL, largeurs = NULL) {
   out[]
 }
 
+
 REL_NOMS <- c("IDENPER", "RELACION", "IDENPER_REL")
 REL_SEP  <- ";"; REL_LARG <- NULL                     # <- à remplir après l'aperçu
 HER_NOMS <- c("IDEN_SP", "IDEN_CAUS", "MODELO", "EJERCICIO", "ANNO_BAJA", "GRUPO_PAR")
@@ -142,8 +153,11 @@ HER_SEP  <- ";"; HER_LARG <- NULL                     # <- idem (Causantes : mê
 
 ### Relaciones
 
+Tabla de tipos de relaciones dentro del panel (2016-2023)
+
 ```{r 4. RELACIONES}
 #| echo: false
+#| warnings: false 
 
 rel <- decoupe(lire_pq("Relaciones_2023"), REL_NOMS, REL_SEP, REL_LARG)
 
@@ -154,9 +168,6 @@ nrel <- rel[, .N, by = IDENPER][, .(n_personnes = .N), by = .(n_rel = pmin(N, 10
 nrel[n_personnes < MIN_N, n_personnes := NA]
 #sauve(nrel, "rel2023_n_par_personne")
 
-#inv <- rel[, .(IDENPER = IDENPER_REL, IDENPER_REL = IDENPER, RELACION_INV = RELACION)]
-#sym <- merge(rel, inv, by = c("IDENPER", "IDENPER_REL"), all.x = TRUE)
-#sauve(freq(sym, c("RELACION", "RELACION_INV")), "rel2023_symetrie")
 
 # Panel 2023 lu depuis le bucket (Parquet partitionné par year)
 p23 <- P23|>
@@ -192,19 +203,40 @@ tab_menage <- rp[, .(
   n_relaciones                = .N,
   pct_conviven_2023           = round(100 * mean(meme_menage), 1),
   pct_convivieron_alguna_vez  = round(100 * mean(convivio_alguna_vez), 1),   # 2016-2023
-#  pct_convivieron_antes_2023  = round(100 * mean(convivio_antes_2023), 1),   # 2016-2022
-#  pct_ex_convivientes         = round(100 * mean(convivio_antes_2023 & !meme_menage), 1),
+  #  pct_convivieron_antes_2023  = round(100 * mean(convivio_antes_2023), 1),   # 2016-2022
+  #  pct_ex_convivientes         = round(100 * mean(convivio_antes_2023 & !meme_menage), 1),
   media_anos_observados_ambos = round(mean(anos_juntos_obs), 1)
 ), by = RELACION]
 tab_menage[, pct_del_total := round(100 * n_relaciones / sum(n_relaciones), 2)]
 setcolorder(tab_menage, c("RELACION", "n_relaciones", "pct_del_total"))
 setorder(tab_menage, -n_relaciones)
 tab_menage[n_relaciones < MIN_N, (names(tab_menage)[-1]) := NA]
-print(tab_menage)
+#print(tab_menage)
 sauve(tab_menage, "rel2023_menage_detail")
 
 
+tab_menage[, `:=`(
+  n_relaciones  = format(n_relaciones, big.mark = " "),
+  pct_del_total = sprintf("%.1f %%", pct_del_total),
+  pct_conviven_2023          = sprintf("%.1f %%", pct_conviven_2023),
+  pct_convivieron_alguna_vez = sprintf("%.1f %%", pct_convivieron_alguna_vez),
+  media_anos_observados_ambos = sprintf("%.1f", media_anos_observados_ambos)
+)]
+
+knitr::kable(
+  tab_menage,
+  col.names = c("Relación", "N", "% del total", "Conviven (2023)",
+                "Convivieron alguna vez (2016-23)", "Años observados juntos (media)"),
+  align = c("l", rep("r", 5)),
+  caption = "Relaciones familiares y convivencia — pares presentes en el panel 2023"
+)
+
+
 ```
+
+**Edad de salida del hogar de los padres**
+
+Tabla de % de hijos que viven en el mismo hogar que sus padres por edad
 
 ```{r depart age}
 #| echo: false
@@ -221,11 +253,35 @@ ids_avec_parent <- unique(cohab[hog_h == hog_p, .(id = hijo, year)])
 py[, vive_con_padres := FALSE][ids_avec_parent, on = .(id, year), vive_con_padres := TRUE]
 
 # Part vivant avec ses parents, par âge (une seule année, ex. 2023)
-tab <- py[year == 2023 & age %between% c(16, 45) & !is.na(w),
+tab <- py[ age %between% c(16, 45) & !is.na(w),
           .(n = .N, pct_con_padres = round(100 * weighted.mean(vive_con_padres, w), 1)), by = age][order(age)]
-print(tab)
+#print(tab)
 cat("Primera edad < 50 % con padres:", tab[pct_con_padres < 50, min(age)], "\n")
+
+
+
+i  <- tab[, which(pct_con_padres < 50)[1]]
+e50 <- tab$age[i - 1] + (tab$pct_con_padres[i - 1] - 50) /
+  (tab$pct_con_padres[i - 1] - tab$pct_con_padres[i])
+
+ggplot(tab, aes(age, pct_con_padres, fill = pct_con_padres >= 50)) +
+  geom_col(width = 0.8) +
+  geom_text(aes(label = sprintf("%.0f", pct_con_padres)), vjust = -0.4, size = 2.6) +
+  geom_hline(yintercept = 50, linetype = "dashed", colour = "grey30") +
+  geom_vline(xintercept = e50, colour = "firebrick") +
+  annotate("text", x = e50 + 0.5, y = 104, hjust = 0, colour = "firebrick",
+           label = sprintf("50 %% a los %.1f años", e50)) +
+  scale_fill_manual(values = c(`TRUE` = "steelblue", `FALSE` = "grey70"), guide = "none") +
+  scale_x_continuous(breaks = seq(16, 45, 2)) +
+  scale_y_continuous(limits = c(0, 107), breaks = seq(0, 100, 25),
+                     labels = function(x) paste0(x, " %")) +
+  labs(x = "Edad", y = "% que vive con al menos un progenitor",
+       title = "Convivencia con los padres por edad, 2016-2023",
+       caption = "Panel de Hogares") +
+  theme_minimal()
 ```
+
+El edad mediano de salida del hogar de los padres es de 27 años
 
 ```{r}
 #| echo: false 
@@ -256,34 +312,49 @@ cat("Primera edad < 50 % con padres:", tab[pct_con_padres < 50, min(age)], "\n")
 
 ```{r 5. HEREDEROS and CAUSANTES}
 #| echo: false
-#| eval: false
 her <- decoupe(lire_pq("Herederos"), HER_NOMS, HER_SEP, HER_LARG)
 
-cat("Lignes :", nrow(her), "| héritiers distincts :", uniqueN(her$IDEN_SP),
-    "| causants distincts :", uniqueN(her$IDEN_CAUS, na.rm = TRUE), "\n")
+cat("Lineas :", nrow(her), "| herederos distintos :", uniqueN(her$IDEN_SP),
+    "| causants distintos :", uniqueN(her$IDEN_CAUS, na.rm = TRUE), "\n")
 freq(her, "MODELO")
-freq(her, c("EJERCICIO", "MODELO"))
+#freq(her, c("EJERCICIO", "MODELO"))
+print("Tabla de sucesiones y donaciones según el tipo de beneficiario :")
 freq(her, "GRUPO_PAR")
 sauve(freq(her, "GRUPO_PAR"),              "her_parente")
 sauve(freq(her[, .(MODELO, causante_en_panel = !is.na(IDEN_CAUS))],
            c("MODELO", "causante_en_panel")), "her_causant_dans_panel")
 
 nh <- her[!is.na(IDEN_CAUS), .N, by = .(IDEN_CAUS, MODELO)][
-  , .(n_causants = .N), by = .(MODELO, n_heritiers = pmin(N, 10L))][order(MODELO, n_heritiers)]
+  , .(n_causants = .N), by = .(MODELO, n_herederos = pmin(N, 10L))][order(MODELO, n_herederos)]
 nh[n_causants < MIN_N, n_causants := NA]
-print(nh)
 sauve(nh, "her_n_heritiers_par_causant")
 
+```
+
+**Renta de los beneficiarios de las successiones y donaciones**
+
+```{r renta herederos}
+#| echo: false
 # Revenu des héritiers l'année de l'héritage vs année précédente (panel du bucket)
 pan <- PANEL |>
-  dplyr::select(IDENPER, year, own_rb, eq_rbd, w) |> filter(!is.na(w)) %>%
+  dplyr::select(IDENPER, year, own_rb, eq_rbd, w) |> dplyr::filter(!is.na(w)) |>
   dplyr::collect() |> as.data.table()
 pan[, `:=`(IDEN_SP = as.character(IDENPER), EJERCICIO = as.character(year))]
 hp <- merge(unique(her[, .(IDEN_SP, EJERCICIO, MODELO)]), pan, by = c("IDEN_SP", "EJERCICIO"))
+wmedian <- function(x, w) {
+  ok <- !is.na(x) & !is.na(w)
+  x <- x[ok]; w <- w[ok]
+  if (!length(x)) return(NA_real_)
+  o <- order(x); x <- x[o]; w <- w[o]
+  x[which(cumsum(w) >= sum(w) / 2)[1]]
+}
+
 res <- hp[, .(n = .N,
-              rb_moy      = weighted.mean(own_rb,  w, na.rm = TRUE),
-              eq_rbd_moy = weighted.mean(eq_rbd, w, na.rm = TRUE)), by = .(EJERCICIO, MODELO)]
-res[n < MIN_N, c("rb_moy", "eq_rbd_moy") := NA]
+              rb_med     = wmedian(own_rb, w),
+              eq_rbd_med = wmedian(eq_rbd, w)), by = .(EJERCICIO, MODELO)]
+res[n < MIN_N, c("rb_med", "eq_rbd_med") := NA]
+res <- res[EJERCICIO %between% c("2016", "2023")]
+setorder(res, -MODELO, EJERCICIO)
 print(res)
 sauve(res[order(EJERCICIO, MODELO)], "her_revenu_heritiers")
 rm(pan, hp); gc()
@@ -292,7 +363,38 @@ cau <- decoupe(lire_pq("Causantes"), HER_NOMS, HER_SEP, HER_LARG)
 sauve(freq(cau, c("EJERCICIO", "MODELO")), "caus_annee_modele")
 sauve(freq(cau[, .(sp_dans_panel = !is.na(IDEN_SP))], "sp_dans_panel"), "caus_sp_dans_panel")
 
-cat("Fini. Bases dans le bucket :", PQ_DIR, "| agrégats en local :", OUT_DIR, "\n")
+gt::gt(res, groupname_col = "MODELO", rowname_col = "EJERCICIO") |>
+  gt::tab_header(title = "Ingresos de los herederos y donatarios",
+                 subtitle = "Año del devengo, euros de 2023, ponderado") |>
+  gt::cols_label(n = "N", rb_med = "Renta bruta mediana", eq_rbd_med = "Renta disponible mediana poor unidad de consump") |>
+  gt::fmt_number(n, decimals = 0, sep_mark = " ") |>
+  gt::fmt_currency(c(rb_med, eq_rbd_med), currency = "EUR", decimals = 0,
+                   sep_mark = " ", placement = "right", incl_space = TRUE) |>
+  gt::sub_missing(missing_text = "–") |>
+  gt::tab_source_note("Panel de Hogares") |>
+  gt::opt_row_striping()
+
+#cat("Fini. Bases dans le bucket :", PQ_DIR, "| agrégats en local :", OUT_DIR, "\n")
 ```
 
-The `echo: false` option disables the printing of code (only output is displayed).
+**Edad de los beneficarios de sucessiones y donaciones**
+
+```{r}
+#| echo: false 
+# Année de naissance des héritiers/donataires (présents dans PANEL)
+nac <- unique(PANEL[!is.na(ANNAC), .(IDEN_SP = as.character(IDENPER), ANNAC = as.integer(ANNAC))],
+              by = "IDEN_SP")
+
+h <- unique(her[, .(IDEN_SP, IDEN_CAUS, MODELO, EJERCICIO = as.integer(EJERCICIO))])
+h <- merge(h, nac, by = "IDEN_SP")
+h[, edad := EJERCICIO - ANNAC]
+
+# 1) Pondéré, années du panel (2016-2023) : poids w de l'année du devengo
+pw <- PANEL[, .(IDEN_SP = as.character(IDENPER), EJERCICIO = as.integer(year), w)]
+hw <- merge(h, pw, by = c("IDEN_SP", "EJERCICIO"))
+edad_rec <- hw[!is.na(w), .(n = .N,
+                            edad_mediana = wmedian(edad, w),
+                            edad_media   = round(weighted.mean(edad, w), 1)),
+               by = MODELO]
+print(edad_rec)
+```
