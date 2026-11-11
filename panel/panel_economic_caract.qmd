@@ -1,12 +1,13 @@
 ---
 title: "panel_economic_caract"
-format: html
-editor: visual
+format:
+  pdf:
+    toc: true
+    number-sections: false
+    colorlinks: true
 ---
 
-## Goal
-
-The goal of this script is to begin linking panel data with idealista prices
+## Goal of the script
 
 ```{r}
 #| echo: false

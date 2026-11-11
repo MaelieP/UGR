@@ -1,15 +1,18 @@
 ---
-title: "explore relaciones"
+title: "Relaciones y herencia en el Panel de Hogares"
 author: "Maëlie"
 format:
-     html:
-       embed-resources: true
-editor: visual
+  pdf:
+    toc: false
+    number-sections: false
+    colorlinks: true
 ---
 
-## Goal
+## Objetivo
 
-This script explores the information available in the *relationships* file and the *herencia* files.
+Este script analiza la información disponible en el archivo «Relaciones» y en los archivos «Herencia» del Panel de Hogares
+
+El panel realiza un seguimiento de los hogares y sus miembros entre 2016 y 2023. Se sigue realizando el seguimiento de los miembros de los hogares de 2016 a lo largo de los distintos periodos, aunque cambien de hogar. Se dispone de información sobre los vínculos que unen a las personas con los miembros de sus hogares y con otros posibles familiares tambien presentes en el panel.
 
 ```{r}
 #| echo: false 
@@ -17,7 +20,7 @@ This script explores the information available in the *relationships* file and t
 library(data.table)
 library(arrow)
 library(ggplot2)
-library(gt)
+library(kableExtra)
 ```
 
 ```{r load panel}
@@ -256,7 +259,6 @@ py[, vive_con_padres := FALSE][ids_avec_parent, on = .(id, year), vive_con_padre
 tab <- py[ age %between% c(16, 45) & !is.na(w),
           .(n = .N, pct_con_padres = round(100 * weighted.mean(vive_con_padres, w), 1)), by = age][order(age)]
 #print(tab)
-cat("Primera edad < 50 % con padres:", tab[pct_con_padres < 50, min(age)], "\n")
 
 
 
@@ -279,9 +281,13 @@ ggplot(tab, aes(age, pct_con_padres, fill = pct_con_padres >= 50)) +
        title = "Convivencia con los padres por edad, 2016-2023",
        caption = "Panel de Hogares") +
   theme_minimal()
+
+
+cat("Primera edad < 50 % con padres:", tab[pct_con_padres < 50, min(age)], "\n")
+
 ```
 
-El edad mediano de salida del hogar de los padres es de 27 años
+El edad mediano de salida del hogar de los padres es de `r tab[pct_con_padres < 50, min(age)]` años
 
 ```{r}
 #| echo: false 
@@ -355,7 +361,7 @@ res <- hp[, .(n = .N,
 res[n < MIN_N, c("rb_med", "eq_rbd_med") := NA]
 res <- res[EJERCICIO %between% c("2016", "2023")]
 setorder(res, -MODELO, EJERCICIO)
-print(res)
+#print(res)
 sauve(res[order(EJERCICIO, MODELO)], "her_revenu_heritiers")
 rm(pan, hp); gc()
 
@@ -363,16 +369,22 @@ cau <- decoupe(lire_pq("Causantes"), HER_NOMS, HER_SEP, HER_LARG)
 sauve(freq(cau, c("EJERCICIO", "MODELO")), "caus_annee_modele")
 sauve(freq(cau[, .(sp_dans_panel = !is.na(IDEN_SP))], "sp_dans_panel"), "caus_sp_dans_panel")
 
-gt::gt(res, groupname_col = "MODELO", rowname_col = "EJERCICIO") |>
-  gt::tab_header(title = "Ingresos de los herederos y donatarios",
-                 subtitle = "Año del devengo, euros de 2023, ponderado") |>
-  gt::cols_label(n = "N", rb_med = "Renta bruta mediana", eq_rbd_med = "Renta disponible mediana poor unidad de consump") |>
-  gt::fmt_number(n, decimals = 0, sep_mark = " ") |>
-  gt::fmt_currency(c(rb_med, eq_rbd_med), currency = "EUR", decimals = 0,
-                   sep_mark = " ", placement = "right", incl_space = TRUE) |>
-  gt::sub_missing(missing_text = "–") |>
-  gt::tab_source_note("Panel de Hogares") |>
-  gt::opt_row_striping()
+
+fmt <- function(x) ifelse(is.na(x), "–", formatC(round(x), format = "d", big.mark = " "))
+
+t <- res[, .(Año = EJERCICIO,
+             N = fmt(n),
+             `Renta bruta mediana` = fmt(rb_med),
+             `Renta disponible mediana por UC` = fmt(eq_rbd_med))]
+
+grupos <- rle(as.character(res$MODELO))
+
+kbl(t, booktabs = TRUE, align = "lrrr",
+    caption = "Ingresos de los herederos y donatarios (año del devengo, euros de 2023, ponderado)") |>
+  kable_styling(latex_options = "hold_position") |>
+  pack_rows(index = setNames(grupos$lengths, grupos$values)) |>
+  footnote(general = "Panel de Hogares",
+           general_title = "")
 
 #cat("Fini. Bases dans le bucket :", PQ_DIR, "| agrégats en local :", OUT_DIR, "\n")
 ```
