@@ -1,0 +1,22 @@
+---
+title: "panel_idealista"
+format: html
+---
+
+```{r}
+library(data.table); library(arrow)
+bkt <- s3_bucket("mperier", endpoint_override = Sys.getenv("AWS_S3_ENDPOINT"))
+source("~/work/UGR/idealista/id_panel.R")
+
+# 1. Panel + code district (depuis mod_moves)
+PANEL <- as.data.table(read_parquet(bkt$path("panel_hogares/panel_persons_2016_2023_sec.parquet")))
+MV <- as.data.table(read_parquet(bkt$path("panel_hogares/mod_moves.parquet")))
+PANEL[MV, on = .(IDENPER, year), DISTRITO := i.DISTRITO]
+
+# 2. Prix Idealista
+IDY <- load_idealista(bkt)
+join_idealista(PANEL, IDY, dist_col = "DISTRITO")
+
+# 3. Contrôle (une fois)
+check_idealista_match(PANEL)
+```
