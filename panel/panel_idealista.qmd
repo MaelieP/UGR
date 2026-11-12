@@ -17,6 +17,65 @@ PANEL[MV, on = .(IDENPER, year), DISTRITO := i.DISTRITO]
 IDY <- load_idealista(bkt)
 join_idealista(PANEL, IDY, dist_col = "DISTRITO")
 
-# 3. Contrôle (une fois)
+# 3. Contrôle
 check_idealista_match(PANEL)
+```
+
+Il faudrait croiser revenu et prix de vente/loc dans les districts et aussi inégalité de revenu avec prix de vente. Aussi évolution des revenus et par district et évolution des prix par district
+
+```{r}
+
+library(data.table)
+
+YR <- 2022   # année du tableau
+
+# Bornes de quintiles pondérées ; les ex aequo restent dans le même quintile
+# (toutes les personnes d'un même district ont le même prix -> quintiles de prix
+# de tailles un peu inégales)
+wbreaks <- function(x, w, p = c(.2, .4, .6, .8)) {
+  ok <- !is.na(x) & !is.na(w) & w > 0
+  o  <- order(x[ok]); xs <- x[ok][o]
+  cw <- cumsum(w[ok][o]) / sum(w[ok])
+  xs[vapply(p, function(pp) which(cw >= pp)[1L], 1L)]
+}
+qcut <- function(x, w) {
+  q <- findInterval(x, wbreaks(x, w), left.open = TRUE) + 1L
+  factor(fifelse(is.na(x), "NA", paste0("Q", q)), levels = c(paste0("Q", 1:5), "NA"))
+}
+
+# Quintiles calculés année par année, sur la population pondérée (NA exclus du calcul)
+PANEL[, q_inc  := qcut(eq_rbd,   w), by = year]
+PANEL[, q_sale := qcut(idl_sale, w), by = year]
+
+T <- PANEL[year == YR & !is.na(w), .(w = sum(w)), by = .(q_inc, q_sale)]
+
+# 1. Répartition jointe (% de la population totale)
+T[, sh := 100 * w / sum(w)]
+tab_joint <- dcast(T, q_inc ~ q_sale, value.var = "sh", fill = 0, drop = FALSE)
+tab_joint[, Total := rowSums(.SD), .SDcols = !"q_inc"]
+
+# 2. En ligne : pour chaque quintile de revenu, répartition par quintile de prix (%)
+T[, sh_row := 100 * w / sum(w), by = q_inc]
+tab_row <- dcast(T, q_inc ~ q_sale, value.var = "sh_row", fill = 0, drop = FALSE)
+
+# 3. Prix médian (€2023/m²) et part sans prix, par quintile de revenu
+wmed <- function(x, w) { ok <- !is.na(x) & !is.na(w); o <- order(x[ok])
+x[ok][o][which(cumsum(w[ok][o]) >= sum(w[ok]) / 2)[1L]] }
+tab_med <- PANEL[year == YR & !is.na(w), .(
+  pop_M         = sum(w) / 1e6,
+  med_sale      = wmed(idl_sale, w),
+  med_rent      = wmed(idl_rent, w),
+  sh_sale_na    = 100 * sum(w[is.na(idl_sale)]) / sum(w)),
+  by = q_inc][order(q_inc)]
+
+num <- function(d) d[, lapply(.SD, function(x) if (is.numeric(x)) round(x, 1) else x)]
+cat("\n== Répartition jointe, % de la population,", YR, "==\n"); print(num(tab_joint))
+cat("\n== % en ligne : répartition des prix dans chaque quintile de revenu ==\n"); print(num(tab_row))
+cat("\n== Prix médians par quintile de revenu ==\n");                             print(num(tab_med))
+
+#OUT_DIR <- "~/work/UGR/panel_income_2016_2023"
+#fwrite(tab_joint, file.path(OUT_DIR, paste0("tab_inc_x_sale_joint_", YR, ".csv")))
+#fwrite(tab_row,   file.path(OUT_DIR, paste0("tab_inc_x_sale_row_",   YR, ".csv")))
+#fwrite(tab_med,   file.path(OUT_DIR, paste0("tab_inc_med_prices_",   YR, ".csv")))
+
 ```
