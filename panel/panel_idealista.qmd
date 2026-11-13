@@ -8,7 +8,7 @@ format:
 ---
 
 ```{r}
-library(data.table); library(arrow); library(knitr); library(kableExtra) ; library(ggplot2)
+library(data.table); library(arrow); library(knitr); library(kableExtra) ; library(ggplot2) ; library(mapSpain) ; library(sf)
 
 
 bkt <- s3_bucket("mperier", endpoint_override = Sys.getenv("AWS_S3_ENDPOINT"))
@@ -189,112 +189,185 @@ ggplot(B, aes(pct, d, colour = ref)) +
 
 Je ne sais pas si je trouve ce graphique si intéressant car il aplatit un phénomène essentiellement spatial.
 
+Idée : faire une ACM pour caractériser type de districts ?
+
 ```{r}
 
-# ---- 0. Paramètres ----------------------------------------------------------
-MIN_OBS <- 10L       # personnes du panel minimum dans le district, chaque année
-MIN_ADS <- 10L        # stock annuel d'annonces de vente minimum 
-Y0 <- 2016L; Y1 <- 2023L
-INC <- "rbd_med"      # revenu suivi : "rbd_med" (médiane) ou "rbd_mean"
 
-# ---- 1. Sélection des districts ---------------------------------------------
-# Prix au district uniquement (pas de repli commune), district non redécoupé
-DL[, ok := n_obs >= MIN_OBS &
-    !is.na(idl_sale_d) & !is.na(idl_n_sale_d) & idl_n_sale_d >= MIN_ADS &
-    !(idl_redrawn %in% TRUE) &
-    !is.na(get(INC)) & get(INC) > 0]
+# Croissance annuelle tendancielle (%), sur toutes les années
+TR <- B[, .(g_renta  = 100 * coef(lm(li ~ year))[2],
+            g_precio = 100 * coef(lm(lp ~ year))[2],
+            w0 = w0[1]), by = DISTRITO]
 
-# Panel cylindré : districts qui passent les seuils toutes les années Y0..Y1
-yrs <- Y0:Y1
-keep <- DL[year %in% yrs, .(n_ok = sum(ok)), by = DISTRITO][n_ok == length(yrs), DISTRITO]
-B <- DL[DISTRITO %in% keep & year %in% yrs]
+# Coupure à la médiane pondérée sur chaque axe
+wmed <- function(x, w) { o <- order(x); x[o][which(cumsum(w[o]) >= sum(w) / 2)[1L]] }
+m_r <- wmed(TR$g_renta, TR$w0); m_p <- wmed(TR$g_precio, TR$w0)
 
-cat("Districts retenus :", length(keep), "sur", DL[year == Y0, uniqueN(DISTRITO)], "\n")
-cat("Part de la population couverte en", Y0, ":",
-    round(100 * B[year == Y0, sum(pop_w)] / DL[year == Y0, sum(pop_w)], 1), "%\n")
+TR[, tipo := factor(fcase(
+  g_precio >= m_p & g_renta >= m_r, "Suben precios y rentas",
+  g_precio >= m_p & g_renta <  m_r, "Suben precios, rentas rezagadas",
+  g_precio <  m_p & g_renta >= m_r, "Suben rentas, precios rezagados",
+  default =                         "Precios y rentas rezagados"),
+  levels = c("Suben precios y rentas", "Suben precios, rentas rezagadas",
+             "Suben rentas, precios rezagados", "Precios y rentas rezagados"))]
 
-# ---- 2. Évolutions depuis Y0 (en log, puis en %) ----------------------------
-B[, `:=`(li = log(get(INC)), lp = log(idl_sale_d))]
-B[, `:=`(di = li - li[year == Y0], dp = lp - lp[year == Y0],
-         w0 = pop_w[year == Y0]), by = DISTRITO]   # poids fixe = population en Y0
+# Tableau
+TR[, .(n_distritos = .N,
+       pct_poblacion   = round(100 * sum(w0) / TR[, sum(w0)], 1),
+       crec_renta_med  = round(weighted.mean(g_renta,  w0), 2),
+       crec_precio_med = round(weighted.mean(g_precio, w0), 2)), by = tipo][order(tipo)]
 
-# Groupes : baisse des prix, puis terciles de hausse (pondérés par la population)
-G <- B[year == Y1, .(DISTRITO, dp_tot = dp, w0)]
-setorder(G, dp_tot)
-G[, grp := "Bajada de precios"]
-G[dp_tot >= 0, grp := c("Menor subida de precios", "Subida intermedia", "Mayor subida de precios")[
-  pmin(3L, 1L + floor(3 * (cumsum(w0) - w0 / 2) / sum(w0)))]]
-G[, grp := factor(grp, levels = c("Bajada de precios", "Menor subida de precios",
-                                  "Subida intermedia", "Mayor subida de precios"))]
-print(G[, .(n_distritos = .N, pob = sum(w0)), by = grp][order(grp)])
-B[G, on = "DISTRITO", grp := i.grp]
-
-# ---- 3. Graphique 1 : indices Y0 = 100 par groupe ---------------------------
-IDX <- B[, .(Renta  = 100 * exp(weighted.mean(di, w0)),
-             Precio = 100 * exp(weighted.mean(dp, w0))), by = .(grp, year)]
-IDX <- melt(IDX, id.vars = c("grp", "year"), variable.name = "serie", value.name = "idx")
-
-g1 <- ggplot(IDX, aes(year, idx, colour = grp, linetype = serie)) +
-  geom_hline(yintercept = 100, linewidth = 0.3, colour = "grey50") +
-  geom_line(linewidth = 0.7) + geom_point(size = 1.2) +
-  scale_linetype_manual(values = c(Renta = "solid", Precio = "dashed"),
-                        labels = c(Renta = "Renta disponible equivalente (mediana)",
-                                   Precio = "Precio de venta (euros/m²)")) +
-  labs(x = NULL, y = paste0("Índice (", Y0, " = 100), euros constantes de 2023"),
-       colour = "Distritos según la subida de precios", linetype = NULL,
-       caption = paste0("Distritos con al menos ", MIN_OBS, " observaciones y ", MIN_ADS,
-                        " anuncios de venta al año, todos los años ", Y0, "-", Y1,
-                        ". Medias ponderadas por la población de ", Y0, ".\n",
-                        "Fuentes: Panel de Hogares (IEF-AEAT-INE), Idealista; elaboración propia.")) +
-  theme_minimal(base_size = 11) +
-  theme(legend.position = "bottom", legend.box = "vertical")
-print(g1)
-
+# Graphique
+ggplot(TR, aes(g_renta, g_precio, colour = tipo)) +
+  geom_vline(xintercept = m_r, linetype = "dashed", colour = "grey50") +
+  geom_hline(yintercept = m_p, linetype = "dashed", colour = "grey50") +
+  geom_point(aes(size = w0), alpha = 0.4) +
+  scale_size_area(max_size = 5, guide = "none") +
+  labs(x = "Crecimiento anual de la renta mediana (%, tendencia 2016-2023)",
+       y = "Crecimiento anual del precio de venta (%, tendencia 2016-2023)",
+       colour = NULL,
+       caption = "Líneas discontinuas: medianas ponderadas por población. Euros constantes de 2023.\nFuentes: Panel de Hogares (IEF-AEAT-INE), Idealista; elaboración propia.") +
+  theme_minimal() + theme(legend.position = "bottom", legend.direction = "vertical")
 ```
 
+carte
+
 ```{r}
-# ---- 4. Graphique 2 : croissance des revenus vs des prix, Y0 -> Y1 ----------
-L <- B[year == Y1, .(DISTRITO, CPRO, dI = 100 * (exp(di) - 1), dP = 100 * (exp(dp) - 1), w0)]
+# ---- Paramètres ----
+M2_BUY  <- 80     # surface du logement type à l'achat (m²) - je crois médiane ine en 2020
+# c'est plutôt 90
+M2_RENT <- 70     # surface du logement type en location (m²) - médiane ine 2020 plutôt 75
+SCALE   <- 1.5    # échelle OCDE du ménage de référence (2 adultes)
+MIN_OBS <- 100L; MIN_ADS <- 40L
 
-wq <- function(x, w, p) { o <- order(x); cw <- cumsum(w[o]) / sum(w); x[o][which(cw >= p)[1L]] }
-lim_I <- c(wq(L$dI, L$w0, .01), wq(L$dI, L$w0, .99))
-lim_P <- c(wq(L$dP, L$w0, .01), wq(L$dP, L$w0, .99))
-n0 <- nrow(L)
-L <- L[dI %between% lim_I & dP %between% lim_P]
-cat("Districts exclus (1 % extrêmes) :", n0 - nrow(L), "sur", n0, "\n")
-cw <- cov.wt(L[, .(dI, dP)], wt = L$w0, cor = TRUE)
-fit <- lm(dP ~ dI, data = L, weights = w0)
-cat("\nCorrélation pondérée (croissance revenu, croissance prix) :", round(cw$cor[1, 2], 3), "\n")
-print(summary(fit)$coefficients)
+A <- DL[n_obs >= MIN_OBS & !(idl_redrawn %in% TRUE) & rbd_med >= 3000]
+A[, inc_hh := rbd_med * SCALE]   # revenu disponible médian du ménage de référence (€2023)
 
-g2 <- ggplot(L, aes(dI, dP)) +
-  geom_hline(yintercept = 0, linewidth = 0.3, colour = "grey60") +
-  geom_vline(xintercept = 0, linewidth = 0.3, colour = "grey60") +
-  geom_point(aes(size = w0), alpha = 0.25, colour = "#2C5F8A", show.legend = FALSE) +
-  geom_smooth(aes(weight = w0), method = "lm", se = TRUE, colour = "#B5442C", linewidth = 0.8) +
-  scale_size_area(max_size = 6) +
-  labs(x = paste0("Variación de la renta mediana del distrito ", Y0, "-", Y1, " (%)"),
-       y = paste0("Variación del precio de venta ", Y0, "-", Y1, " (%)"),
-       caption = paste0("Un punto = un distrito (tamaño proporcional a su población en ", Y0,
-                        "). Correlación ponderada: ", formatC(cw$cor[1, 2], format = "f", digits = 2,
-                                                              decimal.mark = ","), ".\n",
-                        "Euros constantes de 2023. Fuentes: Panel de Hogares (IEF-AEAT-INE), Idealista.")) +
-  theme_minimal(base_size = 11)
-print(g2)
+# Années de revenu pour acheter / part du revenu en loyer
+A[idl_n_sale_d >= MIN_ADS, anos_compra   := M2_BUY  * idl_sale_d / inc_hh]
+A[idl_n_rent_d >= MIN_ADS, pct_alquiler  := 100 * 12 * M2_RENT * idl_rent_d / inc_hh]
 
-# ---- 5. Régressions à effets fixes (toutes les années, panel non cylindré) ---
-# log prix ~ log revenu | district + année : le revenu et le prix évoluent-ils ensemble
-# à l'intérieur d'un district ? Association, pas un effet causal.
-if (requireNamespace("fixest", quietly = TRUE)) {
-  R <- D[ok == TRUE][, `:=`(li = log(get(INC)), lp = log(idl_sale_d))]
-  m1 <- fixest::feols(lp ~ li | DISTRITO + year,      data = R, weights = ~pop_w, cluster = ~DISTRITO)
-  m2 <- fixest::feols(lp ~ li | DISTRITO + CPRO^year, data = R, weights = ~pop_w, cluster = ~DISTRITO)
-  fixest::etable(m1, m2, headers = c("District + année", "District + province×année"))
-} else {
-  message("Installer fixest pour les régressions à effets fixes : install.packages('fixest')")
-}
+# ---- Tableau par année (distribution entre districts, pondérée par la population) ----
+wq <- function(x, w, p) { ok <- !is.na(x); o <- order(x[ok]); cw <- cumsum(w[ok][o]) / sum(w[ok])
+x[ok][o][which(cw >= p)[1L]] }
+EV <- A[, .(anos_p25 = wq(anos_compra, pop_w, .25), anos_med = wq(anos_compra, pop_w, .5),
+            anos_p75 = wq(anos_compra, pop_w, .75),
+            alq_p25  = wq(pct_alquiler, pop_w, .25), alq_med = wq(pct_alquiler, pop_w, .5),
+            alq_p75  = wq(pct_alquiler, pop_w, .75),
+            n_dist_compra = sum(!is.na(anos_compra)), n_dist_alq = sum(!is.na(pct_alquiler))),
+        by = year][order(year)]
+EV
 
+# ---- Graphique : médiane et intervalle P10–P90 ----
+G <- rbind(EV[, .(year, ind = "Años de renta para comprar 80 m²",   p25 = anos_p25, med = anos_med, p75 = anos_p75)],
+           EV[, .(year, ind = "% de la renta para alquilar 70 m²", p25 = alq_p25,  med = alq_med,  p75 = alq_p75)])
 
+ggplot(G, aes(year, med)) +
+  geom_ribbon(aes(ymin = p25, ymax = p75), fill = "#2C5F8A", alpha = 0.2) +
+  geom_line(colour = "#2C5F8A", linewidth = 0.8) + geom_point(colour = "#2C5F8A") +
+  facet_wrap(~ ind, scales = "free_y") +
+  labs(x = NULL, y = NULL,
+       caption = paste0("Hogar de referencia: dos adultos (renta disponible = 1,5 × renta equivalente mediana del distrito).\n",
+                        "Línea: mediana entre distritos; banda: percentiles 25-75, ponderados por población. Euros constantes de 2023.\n",
+                        "Fuentes: Panel de Hogares (IEF-AEAT-INE), Idealista; elaboración propia.")) +
+  theme_minimal()
+
+# ---- Évolution 2016 -> 2023 par district ----
+CH <- dcast(A[year %in% c(2016, 2023)], DISTRITO + CPRO + CMUN ~ year,
+            value.var = c("anos_compra", "pct_alquiler", "pop_w"))
+CH[, `:=`(d_anos = anos_compra_2023 - anos_compra_2016,
+          d_alq  = pct_alquiler_2023 - pct_alquiler_2016)]
+CH[order(-d_anos)][1:20, .(DISTRITO, CPRO, CMUN, anos_compra_2016, anos_compra_2023, d_anos)]
+```
+
+/!\\ préciser que la location est présente dans bcp moins de districts puisque c'est un phénomène essentiellement urbain ajouté à ça le fait que ce soit sur idealista (je pense que qqn l'évoque dans l'un des articles).
+
+Carte
+
+```{r}
+
+pad2 <- function(x) formatC(as.integer(x), width = 2, flag = "0")
+wq <- function(x, w, p) { ok <- !is.na(x); o <- order(x[ok]); cw <- cumsum(w[ok][o]) / sum(w[ok])
+x[ok][o][which(cw >= p)[1L]] }
+
+# ---- Indicateur par province : médiane pondérée des districts ----
+PRV <- A[!is.na(anos_compra), .(anos_med = wq(anos_compra, pop_w, .5), pop_ok = sum(pop_w)),
+         by = .(cpro = pad2(CPRO), year)]
+POP <- DL[, .(pop_tot = sum(pop_w)), by = .(cpro = pad2(CPRO), year)]
+PRV <- POP[PRV, on = .(cpro, year)][, cobertura := pop_ok / pop_tot]
+PRV[cobertura < 0.5, anos_med := NA]   # province mal couverte -> pas de valeur
+
+# Niveau 2023 et variation 2016 -> 2023
+MAP <- dcast(PRV, cpro ~ year, value.var = "anos_med")
+MAP <- MAP[, .(cpro, anos_2023 = `2023`, d_anos = `2023` - `2016`)]
+
+# ---- Fond de carte ----
+prov <- esp_get_prov()   # colonne cpro sur 2 caractères
+prov <- merge(prov, MAP, by = "cpro", all.x = TRUE)
+
+CAP <- paste0("Hogar de referencia: dos adultos (1,5 × renta equivalente mediana del distrito), vivienda de 80 m².\n",
+              "Mediana provincial de los distritos, ponderada por población. País Vasco y Navarra: sin datos fiscales.\n",
+              "Fuentes: Panel de Hogares (IEF-AEAT-INE), Idealista; elaboración propia.")
+
+# Carte 1 : niveau 2023
+ggplot(prov) +
+  geom_sf(aes(fill = anos_2023), colour = "white", linewidth = 0.2) +
+  scale_fill_distiller(palette = "YlOrRd", direction = 1, na.value = "grey85",
+                       name = "Años de renta") +
+  labs(title = "Años de renta necesarios para comprar una vivienda de 80 m², 2023", caption = CAP) +
+  theme_void() + theme(legend.position = "right")
+
+# Carte 2 : variation 2016 -> 2023
+ggplot(prov) +
+  geom_sf(aes(fill = d_anos), colour = "white", linewidth = 0.2) +
+  scale_fill_gradient2(low = "#2C5F8A", mid = "white", high = "#B5442C", midpoint = 0,
+                       na.value = "grey85", name = "Variación\n(años)") +
+  labs(title = "Variación de los años de renta necesarios para comprar 80 m², 2016-2023", caption = CAP) +
+  theme_void() + theme(legend.position = "right")
+
+PRV[year == 2023][order(-anos_med)]   # tableau de contrôle
+```
+
+### Analyse des quartiers qui ont une forte surrepresentation des Q1 et Q5 nationaux
+
+```{r}
+YR      <- 2023L
+SEUIL   <- 0.27    # part de Q1 ou de Q5 au-delà de laquelle on parle de surreprésentation
+MIN_OBS <- 100L
+Z_MIN   <- 1.96    # écart significatif à 20 % (test approximatif, n effectif = nb de ménages)
+
+X <- DL[year == YR & n_obs >= MIN_OBS & !is.na(sh_q1_nat) & !is.na(sh_q5_nat)]
+
+# z-scores : écart à 20 %, en tenant compte de la taille de l'échantillon du district
+X[, `:=`(z_q1 = (sh_q1_nat - 0.2) / sqrt(0.2 * 0.8 / n_hh),
+         z_q5 = (sh_q5_nat - 0.2) / sqrt(0.2 * 0.8 / n_hh))]
+X[, `:=`(sur_q1 = sh_q1_nat > SEUIL & z_q1 > Z_MIN,
+         sur_q5 = sh_q5_nat > SEUIL & z_q5 > Z_MIN)]
+
+X[, perfil := factor(fcase(sur_q5 & !sur_q1, "Sobrerrepresentación Q5",
+                           sur_q1 & !sur_q5, "Sobrerrepresentación Q1",
+                           sur_q1 &  sur_q5, "Q1 y Q5 (polarizado)",
+                           default =         "Sin sobrerrepresentación"),
+                     levels = c("Sobrerrepresentación Q1", "Q1 y Q5 (polarizado)",
+                                "Sin sobrerrepresentación", "Sobrerrepresentación Q5"))]
+
+# 1. Combien de districts et quelle population dans chaque profil
+X[, .(n_distritos = .N, pct_poblacion = round(100 * sum(pop_w) / X[, sum(pop_w)], 1)), by = perfil][order(perfil)]
+
+# 2. Profil moyen de chaque groupe (pondéré par la population)
+wm <- function(x, w) { ok <- !is.na(x); sum(x[ok] * w[ok]) / sum(w[ok]) }
+X[, .(sh_q1        = round(100 * wm(sh_q1_nat, pop_w), 1),
+      sh_q5        = round(100 * wm(sh_q5_nat, pop_w), 1),
+      renta_med    = round(wm(rbd_med, pop_w)),
+      gini         = round(wm(rbd_gini, pop_w), 3),
+      precio_m2    = round(wm(idl_sale, pop_w)),
+      alquiler_m2  = round(wm(idl_rent, pop_w), 1),
+      edad_media   = round(wm(age_mean, pop_w), 1),
+      sh_65plus    = round(100 * wm(sh_65plus, pop_w), 1),
+      tam_hogar    = round(wm(hh_size_mean, pop_w), 2),
+      sh_llegados  = round(100 * wm(sh_mover_in, pop_w), 1),
+      sh_rentistas = round(100 * wm(sh_hh_rent, pop_w), 1)),
+  by = perfil][order(perfil)]
 
 
 ```

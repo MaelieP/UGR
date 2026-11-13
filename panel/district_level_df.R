@@ -79,7 +79,8 @@ D <- PANEL[, {
     # 3. Revenu (revenu équivalent du ménage, porté par chaque personne, €2023)
     rbd_mean     = wmean(eq_rbd, w),
     rbd_p10      = q[1], rbd_med = q[2], rbd_p90 = q[3],
-    rbd_gini     = wgini(eq_rbd, w),
+    #rbd_gini     = wgini(eq_rbd, w),
+    rbd_gini     = wgini(pmax(eq_rbd, 0), w),
     rb_mean      = wmean(eq_rb, w),
     sh_inc_na    = sum(w[is.na(eq_rbd)]) / sum(w),
     sh_q1_nat    = sum(w[q_nat %in% 1L]) / sum(w[!is.na(q_nat)]), # part de la pop du district qui appartient au 1er quintile national 
