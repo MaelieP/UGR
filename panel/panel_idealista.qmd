@@ -8,7 +8,8 @@ format:
 ---
 
 ```{r}
-library(data.table); library(arrow); library(knitr); library(kableExtra)
+library(data.table); library(arrow); library(knitr); library(kableExtra) ; library(ggplot2)
+
 
 bkt <- s3_bucket("mperier", endpoint_override = Sys.getenv("AWS_S3_ENDPOINT"))
 source("~/work/UGR/idealista/id_panel.R")
@@ -24,6 +25,9 @@ join_idealista(PANEL, IDY, dist_col = "DISTRITO")
 
 # 3. Contrôle
 check_idealista_match(PANEL)
+
+# base districtXannée id-panel
+DL <- as.data.table(read_parquet(bkt$path("panel_hogares/district_level.parquet"))) # le dico de cette base est dans le git dossier data 
 ```
 
 Il faudrait croiser revenu et prix de vente/loc dans les districts et aussi inégalité de revenu avec prix de vente. Aussi évolution des revenus et par district et évolution des prix par district
@@ -149,8 +153,6 @@ tab3 |>
 ```
 
 ```{r}
-library(ggplot2)
-
 # Percentile de revenu pondéré (1–100)
 wpct <- function(x, w) {
   r <- rep(NA_integer_, length(x)); ok <- which(!is.na(x) & !is.na(w))
@@ -186,3 +188,113 @@ ggplot(B, aes(pct, d, colour = ref)) +
 ```
 
 Je ne sais pas si je trouve ce graphique si intéressant car il aplatit un phénomène essentiellement spatial.
+
+```{r}
+
+# ---- 0. Paramètres ----------------------------------------------------------
+MIN_OBS <- 10L       # personnes du panel minimum dans le district, chaque année
+MIN_ADS <- 10L        # stock annuel d'annonces de vente minimum 
+Y0 <- 2016L; Y1 <- 2023L
+INC <- "rbd_med"      # revenu suivi : "rbd_med" (médiane) ou "rbd_mean"
+
+# ---- 1. Sélection des districts ---------------------------------------------
+# Prix au district uniquement (pas de repli commune), district non redécoupé
+DL[, ok := n_obs >= MIN_OBS &
+    !is.na(idl_sale_d) & !is.na(idl_n_sale_d) & idl_n_sale_d >= MIN_ADS &
+    !(idl_redrawn %in% TRUE) &
+    !is.na(get(INC)) & get(INC) > 0]
+
+# Panel cylindré : districts qui passent les seuils toutes les années Y0..Y1
+yrs <- Y0:Y1
+keep <- DL[year %in% yrs, .(n_ok = sum(ok)), by = DISTRITO][n_ok == length(yrs), DISTRITO]
+B <- DL[DISTRITO %in% keep & year %in% yrs]
+
+cat("Districts retenus :", length(keep), "sur", DL[year == Y0, uniqueN(DISTRITO)], "\n")
+cat("Part de la population couverte en", Y0, ":",
+    round(100 * B[year == Y0, sum(pop_w)] / DL[year == Y0, sum(pop_w)], 1), "%\n")
+
+# ---- 2. Évolutions depuis Y0 (en log, puis en %) ----------------------------
+B[, `:=`(li = log(get(INC)), lp = log(idl_sale_d))]
+B[, `:=`(di = li - li[year == Y0], dp = lp - lp[year == Y0],
+         w0 = pop_w[year == Y0]), by = DISTRITO]   # poids fixe = population en Y0
+
+# Groupes : baisse des prix, puis terciles de hausse (pondérés par la population)
+G <- B[year == Y1, .(DISTRITO, dp_tot = dp, w0)]
+setorder(G, dp_tot)
+G[, grp := "Bajada de precios"]
+G[dp_tot >= 0, grp := c("Menor subida de precios", "Subida intermedia", "Mayor subida de precios")[
+  pmin(3L, 1L + floor(3 * (cumsum(w0) - w0 / 2) / sum(w0)))]]
+G[, grp := factor(grp, levels = c("Bajada de precios", "Menor subida de precios",
+                                  "Subida intermedia", "Mayor subida de precios"))]
+print(G[, .(n_distritos = .N, pob = sum(w0)), by = grp][order(grp)])
+B[G, on = "DISTRITO", grp := i.grp]
+
+# ---- 3. Graphique 1 : indices Y0 = 100 par groupe ---------------------------
+IDX <- B[, .(Renta  = 100 * exp(weighted.mean(di, w0)),
+             Precio = 100 * exp(weighted.mean(dp, w0))), by = .(grp, year)]
+IDX <- melt(IDX, id.vars = c("grp", "year"), variable.name = "serie", value.name = "idx")
+
+g1 <- ggplot(IDX, aes(year, idx, colour = grp, linetype = serie)) +
+  geom_hline(yintercept = 100, linewidth = 0.3, colour = "grey50") +
+  geom_line(linewidth = 0.7) + geom_point(size = 1.2) +
+  scale_linetype_manual(values = c(Renta = "solid", Precio = "dashed"),
+                        labels = c(Renta = "Renta disponible equivalente (mediana)",
+                                   Precio = "Precio de venta (euros/m²)")) +
+  labs(x = NULL, y = paste0("Índice (", Y0, " = 100), euros constantes de 2023"),
+       colour = "Distritos según la subida de precios", linetype = NULL,
+       caption = paste0("Distritos con al menos ", MIN_OBS, " observaciones y ", MIN_ADS,
+                        " anuncios de venta al año, todos los años ", Y0, "-", Y1,
+                        ". Medias ponderadas por la población de ", Y0, ".\n",
+                        "Fuentes: Panel de Hogares (IEF-AEAT-INE), Idealista; elaboración propia.")) +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "bottom", legend.box = "vertical")
+print(g1)
+
+```
+
+```{r}
+# ---- 4. Graphique 2 : croissance des revenus vs des prix, Y0 -> Y1 ----------
+L <- B[year == Y1, .(DISTRITO, CPRO, dI = 100 * (exp(di) - 1), dP = 100 * (exp(dp) - 1), w0)]
+
+wq <- function(x, w, p) { o <- order(x); cw <- cumsum(w[o]) / sum(w); x[o][which(cw >= p)[1L]] }
+lim_I <- c(wq(L$dI, L$w0, .01), wq(L$dI, L$w0, .99))
+lim_P <- c(wq(L$dP, L$w0, .01), wq(L$dP, L$w0, .99))
+n0 <- nrow(L)
+L <- L[dI %between% lim_I & dP %between% lim_P]
+cat("Districts exclus (1 % extrêmes) :", n0 - nrow(L), "sur", n0, "\n")
+cw <- cov.wt(L[, .(dI, dP)], wt = L$w0, cor = TRUE)
+fit <- lm(dP ~ dI, data = L, weights = w0)
+cat("\nCorrélation pondérée (croissance revenu, croissance prix) :", round(cw$cor[1, 2], 3), "\n")
+print(summary(fit)$coefficients)
+
+g2 <- ggplot(L, aes(dI, dP)) +
+  geom_hline(yintercept = 0, linewidth = 0.3, colour = "grey60") +
+  geom_vline(xintercept = 0, linewidth = 0.3, colour = "grey60") +
+  geom_point(aes(size = w0), alpha = 0.25, colour = "#2C5F8A", show.legend = FALSE) +
+  geom_smooth(aes(weight = w0), method = "lm", se = TRUE, colour = "#B5442C", linewidth = 0.8) +
+  scale_size_area(max_size = 6) +
+  labs(x = paste0("Variación de la renta mediana del distrito ", Y0, "-", Y1, " (%)"),
+       y = paste0("Variación del precio de venta ", Y0, "-", Y1, " (%)"),
+       caption = paste0("Un punto = un distrito (tamaño proporcional a su población en ", Y0,
+                        "). Correlación ponderada: ", formatC(cw$cor[1, 2], format = "f", digits = 2,
+                                                              decimal.mark = ","), ".\n",
+                        "Euros constantes de 2023. Fuentes: Panel de Hogares (IEF-AEAT-INE), Idealista.")) +
+  theme_minimal(base_size = 11)
+print(g2)
+
+# ---- 5. Régressions à effets fixes (toutes les années, panel non cylindré) ---
+# log prix ~ log revenu | district + année : le revenu et le prix évoluent-ils ensemble
+# à l'intérieur d'un district ? Association, pas un effet causal.
+if (requireNamespace("fixest", quietly = TRUE)) {
+  R <- D[ok == TRUE][, `:=`(li = log(get(INC)), lp = log(idl_sale_d))]
+  m1 <- fixest::feols(lp ~ li | DISTRITO + year,      data = R, weights = ~pop_w, cluster = ~DISTRITO)
+  m2 <- fixest::feols(lp ~ li | DISTRITO + CPRO^year, data = R, weights = ~pop_w, cluster = ~DISTRITO)
+  fixest::etable(m1, m2, headers = c("District + année", "District + province×année"))
+} else {
+  message("Installer fixest pour les régressions à effets fixes : install.packages('fixest')")
+}
+
+
+
+
+```
