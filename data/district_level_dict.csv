@@ -1,0 +1,30 @@
+variable,label
+rbd_p90,"Eq. disposable income, P90 (2023 EUR)"
+rbd_gini,"Eq. disposable income, Gini"
+rb_mean,"Eq. gross income, mean (2023 EUR)"
+sh_inc_na,Share with missing income
+sh_q1_nat,Share in national bottom quintile
+sh_q5_nat,Share in national top quintile
+age_mean,Mean age
+sh_0_17,Share aged 0-17
+sh_65plus,Share aged 65+
+sh_female,Share female
+hh_size_mean,Mean household size
+sh_hh_pens,Share in household with pension
+sh_hh_rent,Share in household with rental income
+sh_mover_in,Share moved in this year
+sh_obs_prev,Share observed previous year
+small,Fewer than MIN_OBS obs.
+idl_n_sale_d,Idealista sale stock (district)
+idl_n_rent_d,Idealista rent stock (district)
+idl_n_sec_d,Idealista sections (district)
+idl_redrawn,District code not in 2011 map
+idl_sale_d,"Sale price, district only (EUR/m2)"
+idl_rent_d,"Rent, district only (EUR/m2/month)"
+idl_sale,"Sale price, district or municipality (EUR/m2)"
+idl_rent,"Rent, district or municipality (EUR/m2/month)"
+idl_sale_l1,"Sale price, t-1 (EUR/m2)"
+idl_rent_l1,"Rent, t-1 (EUR/m2/month)"
+idl_geo_sale,Sale price level (dist/mun)
+idl_geo_rent,Rent level (dist/mun)
+idl_ptr,Price-to-annual-rent ratio

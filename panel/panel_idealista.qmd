@@ -1,10 +1,15 @@
 ---
 title: "panel_idealista"
-format: html
+format:
+  pdf:
+    toc: false
+    number-sections: false
+    colorlinks: true
 ---
 
 ```{r}
-library(data.table); library(arrow)
+library(data.table); library(arrow); library(knitr); library(kableExtra)
+
 bkt <- s3_bucket("mperier", endpoint_override = Sys.getenv("AWS_S3_ENDPOINT"))
 source("~/work/UGR/idealista/id_panel.R")
 
@@ -25,13 +30,13 @@ Il faudrait croiser revenu et prix de vente/loc dans les districts et aussi iné
 
 ```{r}
 
-library(data.table)
+YR <- 2022L
+P  <- PANEL[year == YR & !is.na(w)]
 
-YR <- 2022   # année du tableau
+P[, q_inc  := qcut(eq_rbd,   w)]
+P[, q_sale := qcut(idl_sale, w)]
 
-# Bornes de quintiles pondérées ; les ex aequo restent dans le même quintile
-# (toutes les personnes d'un même district ont le même prix -> quintiles de prix
-# de tailles un peu inégales)
+# Quintiles pondérés ; les ex aequo restent dans le même quintile
 wbreaks <- function(x, w, p = c(.2, .4, .6, .8)) {
   ok <- !is.na(x) & !is.na(w) & w > 0
   o  <- order(x[ok]); xs <- x[ok][o]
@@ -42,40 +47,142 @@ qcut <- function(x, w) {
   q <- findInterval(x, wbreaks(x, w), left.open = TRUE) + 1L
   factor(fifelse(is.na(x), "NA", paste0("Q", q)), levels = c(paste0("Q", 1:5), "NA"))
 }
+wmed <- function(x, w) {
+  ok <- !is.na(x) & !is.na(w); o <- order(x[ok])
+  x[ok][o][which(cumsum(w[ok][o]) >= sum(w[ok]) / 2)[1L]]
+}
 
-# Quintiles calculés année par année, sur la population pondérée (NA exclus du calcul)
-PANEL[, q_inc  := qcut(eq_rbd,   w), by = year]
-PANEL[, q_sale := qcut(idl_sale, w), by = year]
 
-T <- PANEL[year == YR & !is.na(w), .(w = sum(w)), by = .(q_inc, q_sale)]
+# ---- Libellés et notes ----
+LAB_INC <- c(Q1 = "Q1 (20 % con menos ingresos)", Q2 = "Q2", Q3 = "Q3", Q4 = "Q4",
+             Q5 = "Q5 (20 % con más ingresos)", `NA` = "Renta no disponible")
+HEAD_PX <- c("Q1", "Q2", "Q3", "Q4", "Q5", "Sin precio")
+SPAN_PX <- "Quintil de precio de venta por m² del distrito de residencia"
+FMT <- list(decimal.mark = ",", big.mark = ".")
+fr  <- function(x, d = 1) formatC(x, format = "f", digits = d, decimal.mark = ",", big.mark = ".")
+NOTE <- c(
+  "Ámbito: personas residentes en España, excepto País Vasco y Navarra, ponderadas.",
+  "Renta: renta disponible equivalente del hogar, euros de 2023.",
+  "Precio: Idealista, media anual del distrito de residencia (en su defecto, del municipio), euros de 2023.",
+  "Quintiles ponderados, calculados sin valores ausentes. Q1 de precio = distritos más baratos.",
+  "Fuentes: Panel de Hogares (IEF-AEAT-INE), Idealista; elaboración propia.")
 
-# 1. Répartition jointe (% de la population totale)
-T[, sh := 100 * w / sum(w)]
-tab_joint <- dcast(T, q_inc ~ q_sale, value.var = "sh", fill = 0, drop = FALSE)
-tab_joint[, Total := rowSums(.SD), .SDcols = !"q_inc"]
+T <- P[, .(w = sum(w)), by = .(q_inc, q_sale)]
 
-# 2. En ligne : pour chaque quintile de revenu, répartition par quintile de prix (%)
-T[, sh_row := 100 * w / sum(w), by = q_inc]
-tab_row <- dcast(T, q_inc ~ q_sale, value.var = "sh_row", fill = 0, drop = FALSE)
+# ---- Tableau 1 : répartition jointe ----
+tj <- dcast(T, q_inc ~ q_sale, value.var = "w", fun.aggregate = sum, fill = 0, drop = FALSE)
+cols <- setdiff(names(tj), "q_inc")
+tj[, (cols) := lapply(.SD, function(x) 100 * x / P[, sum(w)]), .SDcols = cols]
+tj[, Total := rowSums(.SD), .SDcols = cols]
+tj[, q_inc := LAB_INC[as.character(q_inc)]]
+tj <- rbind(tj, tj[, c(.(q_inc = "Total"), lapply(.SD, sum)), .SDcols = !"q_inc"])
+setnames(tj, c("Quintil de renta", HEAD_PX, "Total"))
 
-# 3. Prix médian (€2023/m²) et part sans prix, par quintile de revenu
-wmed <- function(x, w) { ok <- !is.na(x) & !is.na(w); o <- order(x[ok])
-x[ok][o][which(cumsum(w[ok][o]) >= sum(w[ok]) / 2)[1L]] }
-tab_med <- PANEL[year == YR & !is.na(w), .(
-  pop_M         = sum(w) / 1e6,
-  med_sale      = wmed(idl_sale, w),
-  med_rent      = wmed(idl_rent, w),
-  sh_sale_na    = 100 * sum(w[is.na(idl_sale)]) / sum(w)),
-  by = q_inc][order(q_inc)]
+kbl(tj, booktabs = TRUE, digits = 1, format.args = FMT, align = c("l", rep("r", 7)),
+    caption = paste0("Distribución de la población por quintil de renta y quintil de precio, ",
+                     YR, " (en porcentaje de la población total)")) |>
+  add_header_above(setNames(c(1, 5, 2), c(" ", SPAN_PX, " "))) |>
+  row_spec(6, italic = TRUE, hline_after = TRUE) |>
+  row_spec(7, bold = TRUE) |>
+  footnote(general = c(
+    paste0("Lectura: en ", YR, ", el ", fr(tj[[2]][1]),
+           " % de la población pertenece al primer quintil de renta y vive en un distrito del primer quintil de precio."),
+    NOTE),
+    general_title = "", threeparttable = TRUE) |>
+  kable_styling(latex_options = "hold_position", font_size = 9)
 
-num <- function(d) d[, lapply(.SD, function(x) if (is.numeric(x)) round(x, 1) else x)]
-cat("\n== Répartition jointe, % de la population,", YR, "==\n"); print(num(tab_joint))
-cat("\n== % en ligne : répartition des prix dans chaque quintile de revenu ==\n"); print(num(tab_row))
-cat("\n== Prix médians par quintile de revenu ==\n");                             print(num(tab_med))
+# ---- Tableau 2 : % en ligne ----
+tr <- dcast(T, q_inc ~ q_sale, value.var = "w", fun.aggregate = sum, fill = 0, drop = FALSE)
+cols <- setdiff(names(tr), "q_inc")
+ens <- tr[, lapply(.SD, sum), .SDcols = cols]
+tr <- rbind(tr[, q_inc := as.character(q_inc)], ens[, q_inc := "Total"], use.names = TRUE)
+tr[, tot := rowSums(.SD), .SDcols = cols]
+tr[, (cols) := lapply(.SD, function(x) 100 * x / tot), .SDcols = cols]
+tr[, Total := 100][, tot := NULL]
+tr[q_inc != "Total", q_inc := LAB_INC[q_inc]]
+setnames(tr, c("Quintil de renta", HEAD_PX, "Total"))
 
-#OUT_DIR <- "~/work/UGR/panel_income_2016_2023"
-#fwrite(tab_joint, file.path(OUT_DIR, paste0("tab_inc_x_sale_joint_", YR, ".csv")))
-#fwrite(tab_row,   file.path(OUT_DIR, paste0("tab_inc_x_sale_row_",   YR, ".csv")))
-#fwrite(tab_med,   file.path(OUT_DIR, paste0("tab_inc_med_prices_",   YR, ".csv")))
+kbl(tr, booktabs = TRUE, digits = 1, format.args = FMT, align = c("l", rep("r", 7)),
+    caption = paste0("Distribución por quintil de precio dentro de cada quintil de renta, ",
+                     YR, " (en porcentaje de la fila)")) |>
+  add_header_above(setNames(c(1, 5, 2), c(" ", SPAN_PX, " "))) |>
+  row_spec(6, italic = TRUE, hline_after = TRUE) |>
+  row_spec(7, bold = TRUE) |>
+  footnote(general = c(
+    paste0("Lectura: en ", YR, ", el ", fr(tr[[2]][1]),
+           " % de las personas del primer quintil de renta vive en un distrito del primer quintil de precio (el más barato), frente al ",
+           fr(tr[[2]][5]), " % de las personas del quinto quintil."),
+    "Cada fila suma 100 %. La fila Total sirve de referencia.",
+    NOTE),
+    general_title = "", threeparttable = TRUE) |>
+  kable_styling(latex_options = "hold_position", font_size = 9)
+
+# ---- Tableau 3 : prix médians ----
+med <- function(D) D[, .(sale  = wmed(idl_sale, w),
+                         rent  = wmed(idl_rent, w),
+                         na_px = 100 * sum(w[is.na(idl_sale)]) / sum(w),
+                         na_rt = 100 * sum(w[is.na(idl_rent)]) / sum(w))]
+tm <- rbind(P[, med(.SD), by = q_inc][order(q_inc)][, q_inc := LAB_INC[as.character(q_inc)]],
+            cbind(q_inc = "Total", med(P)))
+setnames(tm, c("Quintil de renta",
+               "Precio de venta mediano (euros/m²)", "Alquiler mediano (euros/m²/mes)",
+               "Sin precio de venta (%)", "Sin alquiler (%)"))
+
+n_tm  <- nrow(tm)
+na_tm <- which(tm[[1]] == LAB_INC[["NA"]])   # ligne "Renta no disponible", si elle existe
+
+tab3 <- kbl(tm, booktabs = TRUE, digits = c(0, 0, 2, 1, 1), format.args = FMT, align = c("l", rep("r", 4)),
+            caption = paste0("Precio de la vivienda del distrito de residencia según quintil de renta, ", YR)) |>
+  column_spec(2:5, width = "2.2cm") |>
+  row_spec(n_tm, bold = TRUE)
+if (length(na_tm)) tab3 <- row_spec(tab3, na_tm, italic = TRUE, hline_after = TRUE)
+
+tab3 |>
+  footnote(general = c(
+    paste0("Lectura: en ", YR, ", la mitad de las personas del primer quintil de renta vive en un distrito con un precio medio de venta inferior a ",
+           fr(tm[[2]][1], 0), " euros/m²."),
+    "Medianas ponderadas, calculadas sobre las personas con precio disponible.",
+    NOTE),
+    general_title = "", threeparttable = TRUE) |>
+  kable_styling(latex_options = "hold_position", font_size = 9)
 
 ```
+
+```{r}
+library(ggplot2)
+
+# Percentile de revenu pondéré (1–100)
+wpct <- function(x, w) {
+  r <- rep(NA_integer_, length(x)); ok <- which(!is.na(x) & !is.na(w))
+  o <- ok[order(x[ok])]; cw <- cumsum(w[o]) / sum(w[o])
+  r[o] <- pmin(100L, as.integer(ceiling(100 * cw))); r
+}
+P[, pct := wpct(eq_rbd, w)]
+
+# Prix mesuré au district uniquement ; écarts en log à trois références
+G <- P[!is.na(pct) & idl_geo_sale %in% "dist"]
+G[, `:=`(lp = log(idl_sale), prov = substr(DISTRITO, 1, 2), mun = substr(DISTRITO, 1, 5))]
+G[, d_nat  := lp - weighted.mean(lp, w)]
+G[, d_prov := lp - weighted.mean(lp, w), by = prov]
+G[, n_dist := uniqueN(DISTRITO), by = mun]
+G[n_dist >= 5, d_mun := lp - weighted.mean(lp, w), by = mun]   # villes avec au moins 5 districts
+
+B <- G[, .(`Respecto a la media nacional`           = weighted.mean(d_nat,  w),
+           `Respecto a la media de la provincia`    = weighted.mean(d_prov, w),
+           `Respecto a la media del municipio (≥5 distritos)` = weighted.mean(d_mun, w, na.rm = TRUE)),
+       by = pct]
+B <- melt(B, id.vars = "pct", variable.name = "ref", value.name = "d")
+B[, d := 100 * (exp(d) - 1)]   # écart en %
+
+ggplot(B, aes(pct, d, colour = ref)) +
+  geom_hline(yintercept = 0, linewidth = 0.3, colour = "grey50") +
+  geom_line(linewidth = 0.7) +
+  labs(x = "Percentil de renta disponible equivalente",
+       y = "Precio de venta del distrito de residencia\n(diferencia respecto a la media, %)",
+       colour = NULL,
+       caption = paste0("Fuentes: Panel de Hogares (IEF-AEAT-INE), Idealista; elaboración propia. ", YR, ".")) +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "bottom", legend.direction = "vertical")
+```
+
+Je ne sais pas si je trouve ce graphique si intéressant car il aplatit un phénomène essentiellement spatial.

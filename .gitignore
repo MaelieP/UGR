@@ -6,6 +6,7 @@
 *.parquet
 *.csv
 !Panel_Hogares_content.csv
+!data/district_level_dict.csv
 *.txt
 *.rds
 *.shp
